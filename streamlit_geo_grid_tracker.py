@@ -218,9 +218,7 @@ radius_km = st.sidebar.slider("Radius (km)", 0.5, 10.0, 2.0, 0.5)
 spacing_km = st.sidebar.slider("Grid Spacing (km)", 0.1, 2.0, 0.5, 0.1)
 
 st.sidebar.header("Keywords")
-keywords = [k.strip() for k in st.sidebar.text_area("Keywords (one per line)", "coffee shop near me
-espresso bar
-café").split("\n") if k.strip()]
+keywords = [k.strip() for k in st.sidebar.text_area("Keywords (one per line)", "coffee shop near me" "espresso bar café").split("\n") if k.strip()]
 
 # Session state
 if 'results' not in st.session_state:
