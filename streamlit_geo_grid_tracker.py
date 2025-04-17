@@ -255,7 +255,7 @@ class GeoGridTracker:
         }
 
 # Streamlit UI
-st.set_page_config(page_title="SEO Geo-Grid Visibility Tracker", page_icon="� globe":), layout="wide")
+st.set_page_config(page_title="SEO Geo-Grid Visibility Tracker", page_icon="� globe", layout="wide")
 st.title("🌐 SEO Geo-Grid Visibility Tracker")
 st.markdown("Track local search visibility across a geographic grid. Enter a business profile name and address to center the grid.")
 
