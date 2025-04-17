@@ -19,6 +19,7 @@ import streamlit as st
 from geopy.distance import geodesic
 import folium
 from folium.plugins import HeatMap
+from folium.features import DivIcon
 from streamlit_folium import st_folium
 import plotly.graph_objects as go
 
@@ -30,6 +31,7 @@ class GeoGridTracker:
         self.results_data = []
 
     def geocode_address(self, address: str):
+        """Geocode an address to get latitude and longitude."""
         url = "https://maps.googleapis.com/maps/api/geocode/json"
         params = {"address": address, "key": self.google_maps_api_key}
         resp = requests.get(url, params=params)
@@ -42,6 +44,7 @@ class GeoGridTracker:
     def generate_grid(self, center_lat: float, center_lng: float,
                       radius_km: float, spacing_km: float,
                       shape: str = "Circle") -> list:
+        """Generate circle or square grid of lat/lng points."""
         pts = []
         lat_deg = radius_km / 111.0
         lng_deg = radius_km / (111.0 * math.cos(math.radians(center_lat)))
@@ -61,6 +64,7 @@ class GeoGridTracker:
 
     def search_serp(self, keyword: str, location: dict,
                     language: str = "en", country: str = "us") -> dict:
+        """Query Serpstack JSON API for a keyword from a given lat/lng."""
         url = "https://api.serpstack.com/search"
         params = {
             "access_key": self.serpstack_access_key,
@@ -81,6 +85,7 @@ class GeoGridTracker:
         return data
 
     def find_business_rank(self, serp_data: dict, business_name: str) -> dict:
+        """Extract organic and local-pack rank positions from serp_data."""
         org = None
         for i, r in enumerate(serp_data.get("organic_results", []), start=1):
             if business_name.lower() in r.get("title", "").lower():
@@ -103,6 +108,7 @@ class GeoGridTracker:
                               radius_km: float, spacing_km: float,
                               keywords: list, shape: str = "Circle",
                               progress_bar=None) -> list:
+        """Run grid + SERP queries for each keyword at each point."""
         points = self.generate_grid(center_lat, center_lng, radius_km, spacing_km, shape)
         total = len(points) * len(keywords)
         count = 0
@@ -133,16 +139,15 @@ class GeoGridTracker:
     def create_folium_map(self, data: list,
                           center_lat: float, center_lng: float,
                           result_type: str = "local_pack_rank") -> folium.Map:
-        """Create a Folium map with hoverable circle markers showing rank."""
+        """Create a Folium map with hoverable circle markers showing rank or X."""
         m = folium.Map(location=[center_lat, center_lng], zoom_start=12)
-        from folium.features import DivIcon
         for pt in data:
             rank = pt.get(result_type)
             lat, lng = pt["lat"], pt["lng"]
             if rank is not None:
                 norm = (11 - rank) / 10 if rank <= 10 else 0
                 color = self._get_color_by_rank(norm)
-                # Draw colored circle with tooltip
+                # Circle with hover tooltip
                 folium.CircleMarker(
                     location=[lat, lng],
                     radius=12,
@@ -152,15 +157,13 @@ class GeoGridTracker:
                     fill_opacity=0.7,
                     tooltip=f"{result_type.replace('_',' ').title()}: {rank}"
                 ).add_to(m)
-                # Overlay rank number
+                # Overlay number
                 folium.map.Marker(
                     [lat, lng],
-                    icon=DivIcon(
-                        html=f'<div style="font-size:10px;color:white;text-align:center;">{rank}</div>'
-                    )
+                    icon=DivIcon(html=f"<div style='font-size:10px;color:white;text-align:center;'>{rank}</div>")
                 ).add_to(m)
             else:
-                # Not ranked: red circle with X
+                # Not ranked: red circle + X
                 folium.CircleMarker(
                     location=[lat, lng],
                     radius=12,
@@ -172,13 +175,12 @@ class GeoGridTracker:
                 ).add_to(m)
                 folium.map.Marker(
                     [lat, lng],
-                    icon=DivIcon(
-                        html='<div style="font-size:10px;color:white;text-align:center;">×</div>'
-                    )
+                    icon=DivIcon(html="<div style='font-size:10px;color:white;text-align:center;'>×</div>")
                 ).add_to(m)
         return m
 
-    def _get_color_by_rank(self, norm: float) -> str:(self, norm: float) -> str:
+    def _get_color_by_rank(self, norm: float) -> str:
+        """Map normalized rank to a color."""
         if norm >= 0.8:
             return 'green'
         if norm >= 0.5:
@@ -188,6 +190,7 @@ class GeoGridTracker:
         return 'red'
 
     def generate_summary_data(self) -> dict:
+        """Summarize presence and average ranks."""
         if not self.results_data:
             return {}
         df = pd.DataFrame(self.results_data)
@@ -208,8 +211,7 @@ class GeoGridTracker:
 
 
 # Streamlit App
-st.set_page_config(page_title="SEO Geo-Grid Visibility Tracker",
-                   page_icon="🌐", layout="wide")
+st.set_page_config(page_title="SEO Geo-Grid Visibility Tracker", page_icon="🌐", layout="wide")
 
 st.title("🌐 SEO Geo-Grid Visibility Tracker")
 st.markdown("Track local search visibility across a geographic grid.")
@@ -248,11 +250,11 @@ def display_grid_preview():
     if not place:
         return
     loc = place['geometry']['location']
-    pts = tracker.generate_grid(loc['lat'], loc['lng'], radius_kм, spacing_kм, grid_shape)
+    pts = tracker.generate_grid(loc['lat'], loc['lng'], radius_km, spacing_km, grid_shape)
     m = folium.Map(location=[loc['lat'], loc['lng']], zoom_start=12)
     folium.Marker([loc['lat'], loc['lng']], popup="Center").add_to(m)
     if grid_shape == "Circle":
-        folium.Circle([loc['lat'], loc['lng']], radius=radius_kм*1000,
+        folium.Circle([loc['lat'], loc['lng']], radius=radius_km*1000,
                       color='red', fill=True, fill_opacity=0.1).add_to(m)
     for p in pts:
         folium.CircleMarker([p['lat'], p['lng']], radius=3,
@@ -277,8 +279,8 @@ with tab1:
             data = tracker.run_geo_grid_tracking(
                 business_profile_name,
                 loc['lat'], loc['lng'],
-                radius_kм, spacing_kм,
-                keywords, 
+                radius_km, spacing_km,
+                keywords,
                 shape=grid_shape,
                 progress_bar=bar
             )
