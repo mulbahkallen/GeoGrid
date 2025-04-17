@@ -133,29 +133,52 @@ class GeoGridTracker:
     def create_folium_map(self, data: list,
                           center_lat: float, center_lng: float,
                           result_type: str = "local_pack_rank") -> folium.Map:
+        """Create a Folium map with hoverable circle markers showing rank."""
         m = folium.Map(location=[center_lat, center_lng], zoom_start=12)
+        from folium.features import DivIcon
         for pt in data:
             rank = pt.get(result_type)
-            if rank is None:
-                continue
-            norm = (11 - rank) / 10 if rank <= 10 else 0
-            color = self._get_color_by_rank(norm)
-            folium.CircleMarker(
-                location=[pt["lat"], pt["lng"]],
-                radius=6,
-                color=color,
-                fill=True,
-                fill_color=color,
-                fill_opacity=0.7,
-                popup=(f"{pt['keyword']}: org={pt['organic_rank']}, map={pt['local_pack_rank']}")
-            ).add_to(m)
-        heat = [[pt["lat"], pt["lng"], (11 - pt[result_type]) / 10]
-                for pt in data if pt.get(result_type) is not None]
-        if heat:
-            HeatMap(heat).add_to(m)
+            lat, lng = pt["lat"], pt["lng"]
+            if rank is not None:
+                norm = (11 - rank) / 10 if rank <= 10 else 0
+                color = self._get_color_by_rank(norm)
+                # Draw colored circle with tooltip
+                folium.CircleMarker(
+                    location=[lat, lng],
+                    radius=12,
+                    color=color,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.7,
+                    tooltip=f"{result_type.replace('_',' ').title()}: {rank}"
+                ).add_to(m)
+                # Overlay rank number
+                folium.map.Marker(
+                    [lat, lng],
+                    icon=DivIcon(
+                        html=f'<div style="font-size:10px;color:white;text-align:center;">{rank}</div>'
+                    )
+                ).add_to(m)
+            else:
+                # Not ranked: red circle with X
+                folium.CircleMarker(
+                    location=[lat, lng],
+                    radius=12,
+                    color='red',
+                    fill=True,
+                    fill_color='red',
+                    fill_opacity=0.7,
+                    tooltip="Not ranked (X)"
+                ).add_to(m)
+                folium.map.Marker(
+                    [lat, lng],
+                    icon=DivIcon(
+                        html='<div style="font-size:10px;color:white;text-align:center;">×</div>'
+                    )
+                ).add_to(m)
         return m
 
-    def _get_color_by_rank(self, norm: float) -> str:
+    def _get_color_by_rank(self, norm: float) -> str:(self, norm: float) -> str:
         if norm >= 0.8:
             return 'green'
         if norm >= 0.5:
