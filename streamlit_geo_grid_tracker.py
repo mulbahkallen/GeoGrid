@@ -30,20 +30,18 @@ class GeoGridTracker:
         self.results_data = []
 
     def geocode_address(self, address: str):
-        """Geocode an address to get latitude and longitude."""
         url = "https://maps.googleapis.com/maps/api/geocode/json"
         params = {"address": address, "key": self.google_maps_api_key}
         resp = requests.get(url, params=params)
         data = resp.json()
         if data.get("status") == "OK" and data.get("results"):
             return data["results"][0]
-        st.error(f"Geocode API returned status '{data.get('status')}' with message: {data.get('error_message','No message')}.")
+        st.error(f"Geocode API returned status '{data.get('status')}' with message: {data.get('error_message','No message')}." )
         return None
 
     def generate_grid(self, center_lat: float, center_lng: float,
                       radius_km: float, spacing_km: float,
                       shape: str = "Circle") -> list:
-        """Generate circle or square grid of lat/lng points."""
         pts = []
         lat_deg = radius_km / 111.0
         lng_deg = radius_km / (111.0 * math.cos(math.radians(center_lat)))
@@ -63,7 +61,6 @@ class GeoGridTracker:
 
     def search_serp(self, keyword: str, location: dict,
                     language: str = "en", country: str = "us") -> dict:
-        """Query Serpstack JSON API for a keyword from a given lat/lng."""
         url = "https://api.serpstack.com/search"
         params = {
             "access_key": self.serpstack_access_key,
@@ -84,7 +81,6 @@ class GeoGridTracker:
         return data
 
     def find_business_rank(self, serp_data: dict, business_name: str) -> dict:
-        """Extract organic and local-pack rank positions from serp_data."""
         org = None
         for i, r in enumerate(serp_data.get("organic_results", []), start=1):
             if business_name.lower() in r.get("title", "").lower():
@@ -107,7 +103,6 @@ class GeoGridTracker:
                               radius_km: float, spacing_km: float,
                               keywords: list, shape: str = "Circle",
                               progress_bar=None) -> list:
-        """Run grid + SERP queries for each keyword at each point."""
         points = self.generate_grid(center_lat, center_lng, radius_km, spacing_km, shape)
         total = len(points) * len(keywords)
         count = 0
@@ -121,13 +116,15 @@ class GeoGridTracker:
                 if not data:
                     continue
                 ranks = self.find_business_rank(data, business_name)
-                rec = {"business_name": business_name,
-                       "keyword": kw,
-                       "lat": pt["lat"],
-                       "lng": pt["lng"],
-                       "distance_km": pt["distance_km"],
-                       "timestamp": datetime.datetime.now().isoformat(),
-                       **ranks}
+                rec = {
+                    "business_name": business_name,
+                    "keyword": kw,
+                    "lat": pt["lat"],
+                    "lng": pt["lng"],
+                    "distance_km": pt["distance_km"],
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    **ranks
+                }
                 out.append(rec)
                 time.sleep(1)
         self.results_data = out
@@ -228,16 +225,16 @@ def display_grid_preview():
     if not place:
         return
     loc = place['geometry']['location']
-    pts = tracker.generate_grid(loc['lat'], loc['lng'], radius_km, spacing_km, grid_shape)
+    pts = tracker.generate_grid(loc['lat'], loc['lng'], radius_kм, spacing_kм, grid_shape)
     m = folium.Map(location=[loc['lat'], loc['lng']], zoom_start=12)
     folium.Marker([loc['lat'], loc['lng']], popup="Center").add_to(m)
     if grid_shape == "Circle":
-        folium.Circle([loc['lat'], loc['lng']], radius=radius_km*1000,
+        folium.Circle([loc['lat'], loc['lng']], radius=radius_kм*1000,
                       color='red', fill=True, fill_opacity=0.1).add_to(m)
     for p in pts:
         folium.CircleMarker([p['lat'], p['lng']], radius=3,
                             color='blue', fill=True, fill_opacity=0.5).add_to(m)
-    st_folium(m, width=700, height=400)
+    st_folium(m, width=700, height=400, key="grid_preview")
     st.info(f"{len(pts)} points generated ({grid_shape}).")
 
 # Main UI tabs
@@ -257,7 +254,7 @@ with tab1:
             data = tracker.run_geo_grid_tracking(
                 business_profile_name,
                 loc['lat'], loc['lng'],
-                radius_km, spacing_km,
+                radius_kм, spacing_kм,
                 keywords, 
                 shape=grid_shape,
                 progress_bar=bar
@@ -269,15 +266,15 @@ with tab1:
 with tab2:
     if st.session_state['results']:
         choice = st.radio("Result Type", ["local_pack_rank", "organic_rank"], horizontal=True)
-        for kw in keywords:
+        for idx, kw in enumerate(keywords):
             st.subheader(kw)
-            subset = [r for r in st.session_state['results'] if r['keyword']==kw]
+            subset = [r for r in st.session_state['results'] if r['keyword'] == kw]
             tr = GeoGridTracker(google_api_key, serpstack_key)
             m = tr.create_folium_map(subset,
                                      st.session_state['results'][0]['lat'],
                                      st.session_state['results'][0]['lng'],
                                      choice)
-            st_folium(m, width=800, height=500)
+            st_folium(m, width=800, height=500, key=f"map_{idx}")
     else:
         st.info("No results yet. Run tracking first.")
 
