@@ -39,10 +39,11 @@ class GeoGridTracker:
         data = response.json()
         if data.get("status") == "OK" and data.get("results"):
             return data["results"][0]
+        # Log status and error_message for debugging
+        st.error(f"Geocode API returned status '{data.get('status')}' with message: {data.get('error_message', 'No message')}.")
         return None
 
     def generate_grid(self, center_lat, center_lng, radius_km, spacing_km, shape="Circle"):
-        """Generate a grid of points around a center location."""
         grid_points = []
         lat_deg = radius_km / 111.0
         lng_deg = radius_km / (111.0 * math.cos(math.radians(center_lat)))
@@ -210,7 +211,13 @@ serp_api_key = st.sidebar.text_input("SerpAPI Key", type="password")
 
 st.sidebar.header("Business Details")
 business_profile_name = st.sidebar.text_input("Business Profile Name", "")
-business_address = st.sidebar.text_input("Business Address", "")
+# Add placeholder showing full address format
+business_address = st.sidebar.text_input(
+    "Business Address",
+    "",
+    placeholder="1600 Amphitheatre Parkway, Mountain View, CA 94043, USA"
+)
+
 
 st.sidebar.header("Grid Options")
 grid_shape = st.sidebar.selectbox("Grid Shape", ["Circle", "Square"])
