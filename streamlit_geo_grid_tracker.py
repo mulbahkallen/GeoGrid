@@ -5,7 +5,7 @@ A comprehensive tool to track:
 - Google Local Pack rankings
 - Organic SERP rankings
 - Google Maps listing rankings
-across a customizable geographic grid, with competitor insights, historical comparisons, and exportable reports.
+across a customizable geographic grid, with competitor insights and exportable reports.
 
 Requires:
 - Google Maps API Key
@@ -25,15 +25,13 @@ import streamlit as st
 import googlemaps
 from geopy.distance import geodesic
 import folium
-from folium.plugins import HeatMap
-from folium.map import Marker
+from folium.plugins import HeatMap, MarkerCluster
 from folium.features import DivIcon
-from branca.colormap import LinearColormap
-from streamlit_folium import st_folium
 
-# --- Helper: build color map ---
+# --- Helper: build color map for heatmap legend ---
 def _build_colormap():
-    return LinearColormap(['green', 'orange', 'red'], vmin=1, vmax=10)
+    from branca.colormap import LinearColormap
+    return LinearColormap(['red', 'orange', 'green'], vmin=0, vmax=1)
 
 # --- GeoGrid Tracker Class ---
 class GeoGridTracker:
@@ -51,7 +49,9 @@ class GeoGridTracker:
 
     def find_place_id(self, name: str, loc: dict):
         resp = self.gmaps.find_place(
-            input=name, input_type='textquery', fields=['place_id'],
+            input=name,
+            input_type='textquery',
+            fields=['place_id'],
             location_bias=f"point:{loc['lat']},{loc['lng']}"
         )
         cand = resp.get('candidates', [])
@@ -75,12 +75,22 @@ class GeoGridTracker:
 
     def search_serp(self, kw, loc, lang='en', country='us'):
         url = 'https://api.scraperapi.com/structured/google/search'
-        params = {'api_key': self.scraper_key, 'query': kw, 'language': lang, 'country': country}
-        resp = requests.get(url, params=params)
-        return resp.json() if resp.ok else {}
+        params = {
+            'api_key': self.scraper_key,
+            'query': kw,
+            'language': lang,
+            'country': country
+        }
+        r = requests.get(url, params=params)
+        return r.json() if r.ok else {}
 
     def search_places(self, kw, loc, radius_m=1000):
-        return self.gmaps.places_nearby(location=(loc['lat'], loc['lng']), radius=radius_m, keyword=kw).get('results', [])
+        res = self.gmaps.places_nearby(
+            location=(loc['lat'], loc['lng']),
+            radius=radius_m,
+            keyword=kw
+        )
+        return res.get('results', [])
 
     def run(self, business, address, radius, step, keywords, shape, progress=None):
         center = self.geocode(address)
@@ -106,7 +116,8 @@ class GeoGridTracker:
                             if p.get('place_id') == target_id), None)
                 out.append({
                     'keyword': kw,
-                    'lat': pt['lat'], 'lng': pt['lng'], 'dist_km': pt['dist_km'],
+                    'lat': pt['lat'], 'lng': pt['lng'],
+                    'dist_km': pt['dist_km'],
                     'org_rank': org, 'lp_rank': lp, 'gmp_rank': gmp,
                     'timestamp': datetime.datetime.now().isoformat()
                 })
@@ -128,60 +139,61 @@ class GeoGridTracker:
         return summary
 
     def map(self, data, center, mode):
-        # Google Maps base layer
+        # Google Maps style
         m = folium.Map(location=center, zoom_start=13, tiles=None)
         folium.TileLayer(
             tiles='https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}',
             attr='Google', name='Google Roadmap', control=True
         ).add_to(m)
+        folium.TileLayer(
+            tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+            attr='Google', name='Satellite', control=True
+        ).add_to(m)
         cmap = _build_colormap()
-        cmap.caption = f"{mode.replace('_',' ').title()}"  
+        cmap.caption = 'Heatmap Intensity'  # for heat overlay
 
-        # Add markers with numbers and colors
+        # Plot each grid point with a DivIcon marker
         for d in data:
             r = d.get(mode)
-            if r is None:
-                color = 'red'
-                text = 'X'
-            elif r <= 3:
-                color = 'green'
-                text = str(r)
-            elif r <= 10:
-                color = 'orange'
-                text = str(r)
+            if r and r <= 3:
+                color = 'green'; text = str(r)
+            elif r and r <= 10:
+                color = 'orange'; text = str(r)
             else:
-                color = 'red'
-                text = 'X'
-            html = f"<div style='background:{color};color:white;border-radius:50%;width:24px;height:24px;line-height:24px;text-align:center;font-size:12px'>{text}</div>"
-            Marker(
-                location=(d['lat'], d['lng']),
-                icon=DivIcon(html=html)
+                color = 'red'; text = 'X'
+            html = (
+                f"<div style='background:{color};"
+                f"color:white;border-radius:50%;width:24px;height:24px;"
+                f"line-height:24px;text-align:center;font-size:12px'>{text}</div>"
+            )
+            folium.map.Marker(
+                [d['lat'], d['lng']],
+                icon=DivIcon(html=html),
+                tooltip=f"KW: {d['keyword']}<br>Rank: {r or 'X'}<br>Dist: {d['dist_km']:.2f} km"
             ).add_to(m)
 
-        # Optional heatmap overlay
-        hm_data = [(d['lat'], d['lng'], (11 - d[mode] if d.get(mode) and d[mode] <= 10 else 0))
-                   for d in data if d.get(mode) is not None]
-        HeatMap(hm_data, radius=25, gradient={0:'red',0.5:'orange',1:'green'}).add_to(
-            folium.FeatureGroup(name='Heatmap', show=False).add_to(m)
-        )
+        # Heatmap overlay
+        hm_data = [(d['lat'], d['lng'], (11 - d.get(mode) if d.get(mode) and d.get(mode) <= 10 else 0))
+                   for d in data]
+        fg = folium.FeatureGroup('Heatmap', show=False)
+        HeatMap(hm_data, radius=20, gradient={'0': 'red', '0.5': 'orange', '1': 'green'}).add_to(fg)
+        m.add_child(fg)
 
         folium.LayerControl(collapsed=False).add_to(m)
-        m.add_child(cmap)
         return m
 
 # --- Streamlit App ---
 st.set_page_config(page_title="SEO Geo-Grid Tracker", layout="wide")
 st.title("🌐 SEO Geo-Grid Visibility Tracker")
 
-# Sidebar Inputs
+# Sidebar inputs
 gkey = st.sidebar.text_input("Google Maps API Key", type='password')
 skey = st.sidebar.text_input("ScraperAPI Key", type='password')
 if not gkey or not skey:
-    st.sidebar.warning("Enter both API keys.")
-
+    st.sidebar.warning("Please enter both API keys.")
 biz = st.sidebar.text_input("Business Profile Name")
 addr = st.sidebar.text_input("Business Address", "1600 Amphitheatre Parkway, Mountain View, CA")
-shape = st.sidebar.selectbox("Grid Shape", ['Circle','Square'])
+shape = st.sidebar.selectbox("Grid Shape", ['Circle', 'Square'])
 rad = st.sidebar.slider("Radius (km)", 0.5, 10.0, 2.0, 0.5)
 step = st.sidebar.slider("Spacing (km)", 0.1, 2.0, 0.5, 0.1)
 keywords = [k.strip() for k in st.sidebar.text_area(
@@ -189,60 +201,48 @@ keywords = [k.strip() for k in st.sidebar.text_area(
 ).split("\n") if k.strip()]
 
 # Instantiate tracker
-tracker = None
-if gkey and skey:
-    tracker = GeoGridTracker(gkey, skey)
+tracker = GeoGridTracker(gkey, skey) if gkey and skey else None
 
-# Run Scan
+# Run scan
 def run_scan():
-    progress = st.progress(0)
-    data = tracker.run(biz, addr, rad, step, keywords, shape, progress)
+    prog = st.progress(0)
+    data = tracker.run(biz, addr, rad, step, keywords, shape, prog)
     st.session_state['data'] = data
     st.session_state['summary'] = tracker.summarize()
-
 if tracker and st.sidebar.button("Run Scan"):
     run_scan()
 
-# Display Summary
+# Display summary
 if 'summary' in st.session_state:
     s = st.session_state['summary']
-    cols = st.columns(4)
-    cols[0].metric("Total Checks", s['total_checks'])
-    cols[1].metric("Organic %", f"{s['org_pct']:.1f}%")
-    cols[2].metric("Local Pack %", f"{s['lp_pct']:.1f}%")
-    cols[3].metric("Maps %", f"{s['gmp_pct']:.1f}%")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Checks", s['total_checks'])
+    c2.metric("Organic %", f"{s['org_pct']:.1f}%")
+    c3.metric("Local Pack %", f"{s['lp_pct']:.1f}%")
+    c4.metric("Maps %", f"{s['gmp_pct']:.1f}%")
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["Organic","Local Pack","Maps"])
-for tab, mode in zip([tab1, tab2, tab3], ['org_rank','lp_rank','gmp_rank']):
+tab1, tab2, tab3 = st.tabs(["Organic", "Local Pack", "Maps"])
+for tab, mode in zip([tab1, tab2, tab3], ['org_rank', 'lp_rank', 'gmp_rank']):
     with tab:
         data = st.session_state.get('data', [])
-        if data:
-            if tracker:
-                loc = tracker.geocode(addr)
-                if loc:
-                    center = [loc['lat'], loc['lng']]
-                    m = tracker.map(data, center, mode)
-                    st_folium(m, width=800, height=600)
-                    df = pd.DataFrame(data)
-                    st.download_button(
-                        label="Download CSV",
-                        data=df.to_csv(index=False),
-                        file_name=f"results_{mode}.csv",
-                        key=f"download_csv_{mode}"
-                    )
-                    st.download_button(
-                        label="Download JSON",
-                        data=json.dumps(data, default=str),
-                        file_name=f"results_{mode}.json",
-                        key=f"download_json_{mode}"
-                    )
-                else:
-                    st.error("Could not geocode address.")
-            else:
-                st.error("Missing API keys.")
-        else:
+        if not data:
             st.info("Run a scan to display results.")
+            continue
+        loc = tracker.geocode(addr)
+        if not loc:
+            st.error("Could not geocode address.")
+            continue
+        center = [loc['lat'], loc['lng']]
+        m = tracker.map(data, center, mode)
+        st_folium(m, width=800, height=600)
+        df = pd.DataFrame(data)
+        st.download_button(
+            "Download CSV", df.to_csv(index=False), f"results_{mode}.csv", key=f"csv_{mode}"
+        )
+        st.download_button(
+            "Download JSON", json.dumps(data, default=str), f"results_{mode}.json", key=f"json_{mode}"
+        )
 
 st.markdown("---")
 st.write("© Built with ScraperAPI & Google Maps API")
