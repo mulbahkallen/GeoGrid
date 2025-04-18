@@ -178,7 +178,15 @@ class GeoGridTracker:
             (d['lat'], d['lng'], (11 - d[mode] if d.get(mode) and d[mode] <= 10 else 0))
             for d in data if d.get(mode) is not None
         ]
-        HeatMap(hm_data, radius=25, gradient={0: 'red', 0.5: 'yellow', 1: 'green'}).add_to(
+                # Heatmap layer
+        fg_heat = folium.FeatureGroup(name='Heatmap', show=False)
+        # gradient keys must be strings for folium template
+        HeatMap(
+            hm_data,
+            radius=25,
+            gradient={'0': 'red', '0.5': 'yellow', '1': 'green'}
+        ).add_to(fg_heat)
+        fg_heat.add_to(m).add_to(
             folium.FeatureGroup(name='Heatmap', show=False).add_to(m)
         )
 
