@@ -275,7 +275,7 @@ for tab, mode in zip([tab1, tab2, tab3], ['org_rank', 'lp_rank', 'gmp_rank']):
                         label="Download CSV",
                         data=df.to_csv(index=False),
                         file_name="results.csv",
-                        key=f"download_csv_{mode}"), "results.csv")
+                        key=f"download_csv_{mode}, "results.csv")
                     st.download_button(
                         label="Download JSON",
                         data=json.dumps(data, default=str),
