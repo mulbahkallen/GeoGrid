@@ -213,7 +213,7 @@ if 'summary' in st.session_state:
     cols[3].metric("Maps %", f"{s['gmp_pct']:.1f}%")
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["Organic","Local Pack","Maps"]
+tab1, tab2, tab3 = st.tabs(["Organic","Local Pack","Maps"])
 for tab, mode in zip([tab1, tab2, tab3], ['org_rank','lp_rank','gmp_rank']):
     with tab:
         data = st.session_state.get('data', [])
