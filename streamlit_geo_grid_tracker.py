@@ -237,7 +237,7 @@ for tab, mode in zip([tab1, tab2, tab3], ['org_rank', 'lp_rank', 'gmp_rank']):
             continue
         center = [loc['lat'], loc['lng']]
         m = tracker.map(data, center, mode)
-        st_folium(m, width=800, height=600)
+        st_folium(m, width=800, height=600, key=f"map_{mode}")
         df = pd.DataFrame(data)
         st.download_button(
             "Download CSV", df.to_csv(index=False), f"results_{mode}.csv", key=f"csv_{mode}"
