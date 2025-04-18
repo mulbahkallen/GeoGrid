@@ -271,8 +271,18 @@ for tab, mode in zip([tab1, tab2, tab3], ['org_rank', 'lp_rank', 'gmp_rank']):
                     m = tracker.map(data, center, mode)
                     st_folium(m, width=800, height=600)
                     df = pd.DataFrame(data)
-                    st.download_button("Download CSV", df.to_csv(index=False), "results.csv")
-                    st.download_button("Download JSON", json.dumps(data, default=str), "results.json")
+                    st.download_button(
+                        label="Download CSV",
+                        data=df.to_csv(index=False),
+                        file_name="results.csv",
+                        key=f"download_csv_{mode}"
+                    ), "results.csv")
+                    st.download_button(
+                        label="Download JSON",
+                        data=json.dumps(data, default=str),
+                        file_name="results.json",
+                        key=f"download_json_{mode}"
+                    ), "results.json")
                 else:
                     st.error("Could not geocode address for map display.")
             else:
