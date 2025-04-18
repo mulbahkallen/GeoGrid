@@ -2,7 +2,7 @@
 Streamlit SEO Geo-Grid Visibility Tracker
 
 A comprehensive tool to track:
-- Google local pack rankings
+- Google Local Pack rankings
 - Organic SERP rankings
 - Google Maps listing rankings
 across a customizable geographic grid, with competitor insights, historical comparisons, and exportable reports.
@@ -48,7 +48,10 @@ class GeoGridTracker:
         return res[0]['geometry']['location']
 
     def get_place_details(self, place_id: str):
-        res = self.gmaps.place(place_id=place_id, fields=['name','rating','user_ratings_total','url'])
+        res = self.gmaps.place(
+            place_id=place_id,
+            fields=['name','rating','user_ratings_total','url']
+        )
         return res.get('result', {})
 
     def find_place_id(self, name: str, loc: dict):
@@ -85,8 +88,8 @@ class GeoGridTracker:
             'language': lang,
             'country': country
         }
-        r = requests.get(url, params=params)
-        return r.json() if r.ok else {}
+        resp = requests.get(url, params=params)
+        return resp.json() if resp.ok else {}
 
     def search_places(self, kw, loc, radius_m=1000):
         res = self.gmaps.places_nearby(
@@ -105,9 +108,9 @@ class GeoGridTracker:
 
         grid = self.gen_grid(center['lat'], center['lng'], radius, step, shape)
         total = len(grid) * len(keywords)
-
         out = []
         count = 0
+
         for pt in grid:
             for kw in keywords:
                 count += 1
@@ -155,9 +158,8 @@ class GeoGridTracker:
 
     def summarize(self):
         df = pd.DataFrame(self.results)
-        tot = len(df)
         summary = {
-            'total_checks': tot,
+            'total_checks': len(df),
             'org_pct': df['org_rank'].notna().mean() * 100,
             'lp_pct': df['lp_rank'].notna().mean() * 100,
             'gmp_pct': df['gmp_rank'].notna().mean() * 100
@@ -173,7 +175,7 @@ class GeoGridTracker:
         cmap.caption = f"{mode.replace('_', ' ').title()} (1=Best)"
 
         hm_data = [
-            (d['lat'], d['lng'], (11 - d[mode] if d.get(mode) and d[mode] <= 10 else 0))
+            (d['lat'], d['lng'], (11 - d[mode] if d[mode] and d[mode] <= 10 else 0))
             for d in data if d.get(mode) is not None
         ]
         HeatMap(hm_data, radius=25, gradient={0: 'red', 0.5: 'yellow', 1: 'green'}).add_to(
@@ -212,6 +214,8 @@ st.title("🌐 SEO Geo-Grid Visibility Tracker")
 # Sidebar Inputs
 gkey = st.sidebar.text_input("Google Maps API Key", type='password')
 skey = st.sidebar.text_input("ScraperAPI Key", type='password')
+if not gkey or not skey:
+    st.sidebar.warning("Please enter both Google Maps API Key and ScraperAPI Key to enable scanning.")
 biz = st.sidebar.text_input("Business Profile Name")
 addr = st.sidebar.text_input("Business Address", "1600 Amphitheatre Parkway, Mountain View, CA")
 shape = st.sidebar.selectbox("Grid Shape", ['Circle', 'Square'])
@@ -221,20 +225,23 @@ keywords = [k.strip() for k in st.sidebar.text_area(
     "Keywords (one per line)", "coffee shop near me\nespresso bar\ncafé"
 ).split("\n") if k.strip()]
 
-# Instantiate tracker
-global_tracker = GeoGridTracker(gkey, skey)
+# Instantiate tracker when keys are provided
+tracker = None
+if gkey and skey:
+    tracker = GeoGridTracker(gkey, skey)
 
-# Run Scan
+# --- Run Scan Function ---
 def run_scan():
     progress = st.progress(0)
-    data = global_tracker.run(biz, addr, rad, step, keywords, shape, progress)
+    data = tracker.run(biz, addr, rad, step, keywords, shape, progress)
     st.session_state['data'] = data
-    st.session_state['summary'] = global_tracker.summarize()
+    st.session_state['summary'] = tracker.summarize()
 
-if st.sidebar.button("Run Scan"):
+# Run scan on button click
+if tracker and st.sidebar.button("Run Scan"):
     run_scan()
 
-# Show Summary
+# --- Display Summary ---
 if 'summary' in st.session_state:
     s = st.session_state['summary']
     cols = st.columns(4)
@@ -243,22 +250,25 @@ if 'summary' in st.session_state:
     cols[2].metric("Local Pack %", f"{s['lp_pct']:.1f}%")
     cols[3].metric("Maps %", f"{s['gmp_pct']:.1f}%")
 
-# Tabs for each rank type
-tab1, tab2, tab3 = st.tabs(["Organic", "Local Pack", "Maps"] )
+# --- Tabs for each rank type ---
+tab1, tab2, tab3 = st.tabs(["Organic", "Local Pack", "Maps"])
 for tab, mode in zip([tab1, tab2, tab3], ['org_rank', 'lp_rank', 'gmp_rank']):
     with tab:
         data = st.session_state.get('data', [])
         if data:
-            loc = global_tracker.geocode(addr)
-            if loc:
-                center = [loc['lat'], loc['lng']]
-                m = global_tracker.map(data, center, mode)
-                st_folium(m, width=800, height=600)
-                df = pd.DataFrame(data)
-                st.download_button("Download CSV", df.to_csv(index=False), "results.csv")
-                st.download_button("Download JSON", json.dumps(data, default=str), "results.json")
+            if tracker:
+                loc = tracker.geocode(addr)
+                if loc:
+                    center = [loc['lat'], loc['lng']]
+                    m = tracker.map(data, center, mode)
+                    st_folium(m, width=800, height=600)
+                    df = pd.DataFrame(data)
+                    st.download_button("Download CSV", df.to_csv(index=False), "results.csv")
+                    st.download_button("Download JSON", json.dumps(data, default=str), "results.json")
+                else:
+                    st.error("Could not geocode address for map display.")
             else:
-                st.error("Could not geocode address for map display.")
+                st.error("API keys missing. Please provide credentials.")
         else:
             st.info("Run a scan to display results.")
 
