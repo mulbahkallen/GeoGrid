@@ -27,6 +27,7 @@ from geopy.distance import geodesic
 import folium
 from folium.plugins import HeatMap, MarkerCluster
 from folium.features import DivIcon
+from streamlit_folium import st_folium  # Added missing import
 
 # --- Helper: build color map for heatmap legend ---
 def _build_colormap():
@@ -150,7 +151,7 @@ class GeoGridTracker:
             attr='Google', name='Satellite', control=True
         ).add_to(m)
         cmap = _build_colormap()
-        cmap.caption = 'Heatmap Intensity'  # for heat overlay
+        cmap.caption = 'Heatmap Intensity'
 
         # Plot each grid point with a DivIcon marker
         for d in data:
@@ -191,6 +192,7 @@ gkey = st.sidebar.text_input("Google Maps API Key", type='password')
 skey = st.sidebar.text_input("ScraperAPI Key", type='password')
 if not gkey or not skey:
     st.sidebar.warning("Please enter both API keys.")
+
 biz = st.sidebar.text_input("Business Profile Name")
 addr = st.sidebar.text_input("Business Address", "1600 Amphitheatre Parkway, Mountain View, CA")
 shape = st.sidebar.selectbox("Grid Shape", ['Circle', 'Square'])
