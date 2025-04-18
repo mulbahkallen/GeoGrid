@@ -31,7 +31,7 @@ def _build_colormap():
 
 class GeoGridTracker:
     def __init__(self, google_maps_api_key: str, scraperapi_key: str):
-        self.gmaps_client = googlemaps.Client(key=AIzaSyDRIJdgLLpsKERUJiGdLqkATCr9oEeokAI)
+        self.gmaps_client = googlemaps.Client(key="AIzaSyDRIJdgLLpsKERUJiGdLqkATCr9oEeokAI")
         self.scraperapi_key = "f3e829e606f9b61188f69d52987999c2"
         self.results_data = []
 
