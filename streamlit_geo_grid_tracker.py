@@ -21,14 +21,14 @@ from geopy.distance import geodesic
 import folium
 from folium.plugins import HeatMap, MarkerCluster
 from folium.features import DivIcon
-from branca.colormap import linear
+from branca.colormap import LinearColormap
 from streamlit_folium import st_folium
 import plotly.graph_objects as go
 
 
 def _build_colormap():
     # Green (top) -> Yellow (mid) -> Red (low)
-    return linear.LinearColormap(["green", "yellow", "red"], vmin=1, vmax=10)
+    return LinearColormap(["green", "yellow", "red"], vmin=1, vmax=10)
 
 class GeoGridTracker:
     def __init__(self, google_maps_api_key: str, scraperapi_key: str):
