@@ -145,8 +145,8 @@ class GeoGridTracker:
                     'org_rank': org,
                     'lp_rank': lp,
                     'gmp_rank': gmp,
-                    'target_rating': target_info.get('rating'),
-                    'target_reviews': target_info.get('user_ratings_total'),
+                    'target_rating': target_info.get('rating') if target_info else None,
+                    'target_reviews': target_info.get('user_ratings_total') if target_info else None,
                     'competitors': comp_list,
                     'timestamp': datetime.datetime.now().isoformat()
                 }
@@ -175,7 +175,7 @@ class GeoGridTracker:
         cmap.caption = f"{mode.replace('_', ' ').title()} (1=Best)"
 
         hm_data = [
-            (d['lat'], d['lng'], (11 - d[mode] if d[mode] and d[mode] <= 10 else 0))
+            (d['lat'], d['lng'], (11 - d[mode] if d.get(mode) and d[mode] <= 10 else 0))
             for d in data if d.get(mode) is not None
         ]
         HeatMap(hm_data, radius=25, gradient={0: 'red', 0.5: 'yellow', 1: 'green'}).add_to(
@@ -187,11 +187,11 @@ class GeoGridTracker:
             r = d.get(mode)
             color = 'gray' if r is None else cmap(min(max(11 - r, 1), 10))
             tooltip = (
-                f"Rank: {r or 'X'}<br>KW: {d['keyword']}<br>Dist: {d['dist_km']:.2f} km"
-                f"<br>My Biz: {d['target_rating']}★ ({d['target_reviews']} revs)"
+                f"Rank: {r or 'X'}<br>KW: {d.get('keyword','')}<br>Dist: {d.get('dist_km',0):.2f} km"
+                f"<br>My Biz: {d.get('target_rating','N/A')}★ ({d.get('target_reviews','N/A')} revs)"
             )
-            for c in d['competitors'][:3]:
-                tooltip += f"<br>{c['position']}. {c['name']} {c['rating']}★"
+            for c in d.get('competitors', [])[:3]:
+                tooltip += f"<br>{c.get('position','')}\. {c.get('name','')} {c.get('rating','')}★"
 
             folium.CircleMarker(
                 [d['lat'], d['lng']],
