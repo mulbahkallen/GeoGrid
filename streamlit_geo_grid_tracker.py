@@ -87,11 +87,13 @@ def google_places_fetch(lat, lon, keyword, api_key):
     all_results = []
     for _ in range(3):
         r = session.get(base, params=params, timeout=30)
-        if not r.ok: break
+        if not r.ok:
+            break
         data = r.json()
         all_results.extend(data.get('results', []))
         token = data.get('next_page_token')
-        if not token: break
+        if not token:
+            break
         time.sleep(2)
         params['pagetoken'] = token
     structured = []
@@ -107,12 +109,10 @@ def google_places_fetch(lat, lon, keyword, api_key):
 
 def google_places_rank(lat, lon, business_name, domain, api_key):
     spots = google_places_fetch(lat, lon, business_name, api_key)
-    map_rank = None
     for idx, item in enumerate(spots, start=1):
         if business_name.lower() in item['name']:
-            map_rank = idx
-            break
-    return map_rank
+            return idx
+    return None
 
 # --- Color map builder ---
 def _build_colormap():
@@ -128,15 +128,19 @@ def create_scattermap(df, center_lat, center_lon, rank_col, title):
             color, text = 'red','X'
         else:
             r = int(r)
-            if r <=3: color='green'
-            elif r <=10: color='orange'
-            else: color='red'
+            if r <= 3:
+                color = 'green'
+            elif r <= 10:
+                color = 'orange'
+            else:
+                color = 'red'
             text = str(r)
         fig.add_trace(go.Scattermapbox(
             lat=[row['lat']], lon=[row['lng']], mode='markers+text',
             marker=dict(size=20, color=color), text=[text], textposition='middle center',
             textfont=dict(size=14, color='white'), hoverinfo='text',
-            hovertext=f"Keyword: {row['keyword']}<br>Rank: {text}<br>Dist: {row['dist_km']:.2f}km",
+            hovertext=(f"Keyword: {row['keyword']}<br>Rank: {text}<br>"
+                       f"Dist: {row['dist_km']:.2f}km"),
             showlegend=False
         ))
     fig.update_layout(
@@ -161,46 +165,76 @@ class GeoGridTracker:
         return res[0]['geometry']['location'] if res else None
 
     def reverse_city(self, lat, lng):
-        resp = self.gmaps.reverse_geocode((lat,lng), result_type=['locality','administrative_area_level_1'])
+        resp = self.gmaps.reverse_geocode((lat, lng), result_type=['locality','administrative_area_level_1'])
         for comp in resp[0]['address_components']:
             if 'locality' in comp['types'] or 'administrative_area_level_1' in comp['types']:
                 return comp['long_name']
         return None
 
     def gen_grid(self, lat0, lng0, radius, step, shape):
-        pts=[]
-        lat_deg = radius/111.0
-        lng_deg = radius/(111.0*math.cos(math.radians(lat0)))
-        rows = int(2*lat_deg/(step/111.0))+1
-        cols = int(2*lng_deg/(step/111.0))+1
+        pts = []
+        lat_deg = radius / 111.0
+        lng_deg = radius / (111.0 * math.cos(math.radians(lat0)))
+        rows = int(2 * lat_deg / (step / 111.0)) + 1
+        cols = int(2 * lng_deg / (step / 111.0)) + 1
         for i in range(rows):
             for j in range(cols):
-                lat = lat0 - lat_deg + (i*2*lat_deg/(rows-1) if rows>1 else 0)
-                lng = lng0 - lng_deg + (j*2*lng_deg/(cols-1) if cols>1 else 0)
-                d = geodesic((lat0,lng0),(lat,lng)).km
-                if shape=='Circle' and d>radius: continue
-                pts.append({'lat':lat,'lng':lng,'dist_km':d})
+                lat = lat0 - lat_deg + (i * 2 * lat_deg / (rows - 1) if rows > 1 else 0)
+                lng = lng0 - lng_deg + (j * 2 * lng_deg / (cols - 1) if cols > 1 else 0)
+                d = geodesic((lat0, lng0), (lat, lng)).km
+                if shape == 'Circle' and d > radius:
+                    continue
+                pts.append({'lat': lat, 'lng': lng, 'dist_km': d})
         return pts
+
+    def normalize_url(self, url):
+        return url.rstrip('/').lower()
 
     def run_scan(self, business, website, radius, step, shape, progress=None):
         center = self.geocode(business)
-        if not center: return []
+        if not center:
+            return []
+        target_url = self.normalize_url(website)
         domain = urlparse(website).netloc.lower()
         grid = self.gen_grid(center['lat'], center['lng'], radius, step, shape)
         total = len(grid)
-        out=[]
+        out = []
         for idx, pt in enumerate(grid, start=1):
-            if progress: progress.progress(idx/total)
+            if progress:
+                progress.progress(idx / total)
             city = self.reverse_city(pt['lat'], pt['lng']) or ''
             locn = serpstack_location_api(self.serpkey, city)
             serp = serpstack_search(self.serpkey, business, locn or city)
-            org = next((i for i, r in enumerate(serp.get('organic_results', []),1)
-                        if domain in r.get('url','') or business.lower() in r.get('title','').lower()), None)
-            lp = next((i for i, r in enumerate(serp.get('local_results', []),1)
-                       if business.lower() in r.get('title','').lower()), None)
-            gmp = google_places_rank(pt['lat'], pt['lng'], business, domain, self.gmaps_key)
-            out.append({'keyword':business,'lat':pt['lat'],'lng':pt['lng'],'dist_km':pt['dist_km'],
-                        'org_rank':org,'lp_rank':lp,'gmp_rank':gmp})
+            # Organic: match exact URL first, then fallback to domain/title
+            org_rank = None
+            for item in serp.get('organic_results', []):
+                url = item.get('url', '').rstrip('/').lower()
+                pos = item.get('position') or None
+                if url == target_url:
+                    org_rank = pos
+                    break
+            if org_rank is None:
+                for item in serp.get('organic_results', []):
+                    u = item.get('url', '').lower()
+                    title = item.get('title', '').lower()
+                    if domain in u or business.lower() in title:
+                        org_rank = item.get('position')
+                        break
+            # Local Pack: direct from local_results
+            lp_rank = None
+            for item in serp.get('local_results', []):
+                if business.lower() == item.get('title', '').lower():
+                    lp_rank = item.get('position') or None
+                    break
+            # Google Maps listing
+            gmp_rank = google_places_rank(pt['lat'], pt['lng'], business, domain, self.gmaps_key)
+            out.append({
+                'keyword': business,
+                'lat': pt['lat'], 'lng': pt['lng'], 'dist_km': pt['dist_km'],
+                'org_rank': org_rank,
+                'lp_rank': lp_rank,
+                'gmp_rank': gmp_rank
+            })
             time.sleep(1)
         self.results = out
         st.session_state['center'] = center
@@ -214,7 +248,7 @@ gmaps_key = st.sidebar.text_input('Google Maps API Key', type='password')
 serp_key = st.sidebar.text_input('Serpstack API Key', type='password')
 business = st.sidebar.text_input('Business Profile Name')
 website = st.sidebar.text_input('Website URL')
-shape = st.sidebar.selectbox('Grid Shape', ['Circle','Square'])
+shape = st.sidebar.selectbox('Grid Shape', ['Circle', 'Square'])
 radius = st.sidebar.slider('Radius (km)', 0.5, 10.0, 2.0, 0.5)
 step = st.sidebar.slider('Spacing (km)', 0.1, 2.0, 0.5, 0.1)
 tracker = GeoGridTracker(serp_key, gmaps_key) if serp_key and gmaps_key else None
@@ -226,9 +260,9 @@ if tracker and business and website:
         df = pd.DataFrame(data)
         st.session_state['summary'] = {
             'total': len(df),
-            'org_pct': df['org_rank'].notna().mean()*100,
-            'lp_pct': df['lp_rank'].notna().mean()*100,
-            'gmp_pct': df['gmp_rank'].notna().mean()*100
+            'org_pct': df['org_rank'].notna().mean() * 100,
+            'lp_pct': df['lp_rank'].notna().mean() * 100,
+            'gmp_pct': df['gmp_rank'].notna().mean() * 100
         }
 else:
     st.sidebar.warning('Enter all fields to run scan')
@@ -236,20 +270,20 @@ else:
 # Display results
 if 'data' in st.session_state:
     s = st.session_state['summary']
-    c1,c2,c3,c4 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric('Points', s['total'])
     c2.metric('Organic %', f"{s['org_pct']:.1f}%")
     c3.metric('Local Pack %', f"{s['lp_pct']:.1f}%")
     c4.metric('Maps %', f"{s['gmp_pct']:.1f}%")
-    tab1,tab2,tab3 = st.tabs(['Local Pack Coverage','Organic Heatmap','Maps Coverage'])
+    tab1, tab2, tab3 = st.tabs(['Local Pack Coverage', 'Organic Heatmap', 'Maps Coverage'])
     center = st.session_state['center']
     df = pd.DataFrame(st.session_state['data'])
     with tab1:
         fig1 = create_scattermap(df, center['lat'], center['lng'], 'lp_rank', 'Local Pack Coverage')
         st.plotly_chart(fig1, use_container_width=True)
     with tab2:
-        folmap = folium.Map(location=[center['lat'],center['lng']], zoom_start=12, tiles='CartoDB positron')
-        HeatMap([(d['lat'],d['lng'],(11-d['org_rank'] if d['org_rank'] and d['org_rank']<=10 else 0)) for d in st.session_state['data']]).add_to(folmap)
+        folmap = folium.Map(location=[center['lat'], center['lng']], zoom_start=12, tiles='CartoDB positron')
+        HeatMap([(d['lat'], d['lng'], (11 - d['org_rank'] if d['org_rank'] and d['org_rank'] <= 10 else 0)) for d in st.session_state['data']]).add_to(folmap)
         st_folium(folmap, key='organic_heatmap', width=700, height=500)
     with tab3:
         fig3 = create_scattermap(df, center['lat'], center['lng'], 'gmp_rank', 'Google Maps Coverage')
