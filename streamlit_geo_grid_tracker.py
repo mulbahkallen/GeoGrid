@@ -220,10 +220,7 @@ shape = st.sidebar.selectbox("Grid Shape", ['Circle', 'Square'])
 rad = st.sidebar.slider("Radius (km)", 0.5, 10.0, 2.0, 0.5)
 step = st.sidebar.slider("Spacing (km)", 0.1, 2.0, 0.5, 0.1)
 keywords = [k.strip() for k in st.sidebar.text_area(
-    "Keywords (one per line)", "coffee shop near me
-espresso bar
-café"
-).split("\n") if k.strip()]
+    "Keywords (one per line)", "coffee shop near me espresso bar café").split("\n") if k.strip()]
 
 # Instantiate tracker
 global_tracker = GeoGridTracker(gkey, skey)
