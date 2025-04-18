@@ -23,7 +23,6 @@ from folium.plugins import HeatMap, MarkerCluster
 from folium.features import DivIcon
 from branca.colormap import LinearColormap
 from streamlit_folium import st_folium
-import plotly.graph_objects as go
 
 
 def _build_colormap():
@@ -45,9 +44,7 @@ class GeoGridTracker:
 
     def get_target_place_id(self, name: str, loc: dict) -> str:
         resp = self.gmaps_client.find_place(
-            input=name,
-            input_type='textquery',
-            fields=['place_id'],
+            input=name, input_type='textquery', fields=['place_id'],
             location_bias=f"point:{loc['lat']},{loc['lng']}"
         )
         cands = resp.get('candidates', [])
@@ -115,21 +112,20 @@ class GeoGridTracker:
     def create_map(self, data, lat0, lng0, mode):
         m = folium.Map(location=[lat0, lng0], zoom_start=13, tiles='CartoDB positron')
         cmap = _build_colormap()
+        # Ensure child keys are strings to avoid camelize error
+        cmap._children = {str(k): v for k, v in cmap._children.items()}
         # Heatmap layer
-        hm_data = [(d['lat'], d['lng'], (11 - d[mode] if d[mode] and d[mode] <= 10 else 0))
+        hm_data = [(d['lat'], d['lng'], (11 - d[mode] if d.get(mode) and d[mode] <= 10 else 0))
                    for d in data if d.get(mode)]
-        HeatMap(hm_data, radius=25, gradient={0: 'red', 0.5: 'yellow', 1: 'green'}).add_to(
-            folium.FeatureGroup('Heatmap', show=False).add_to(m))
+        HeatMap(hm_data, radius=25, gradient={0: 'red', 0.5: 'yellow', 1: 'green'})
         # Clustered markers
         cluster = MarkerCluster(name='Points').add_to(m)
         for d in data:
             r = d.get(mode)
             if r:
                 color = cmap(min(max(11 - r, 1), 10))
-                label = str(r)
             else:
                 color = 'gray'
-                label = '×'
             tooltip = (f"{mode.upper()}: {r or 'X'}<br>KW: {d['keyword']}"
                        f"<br>Dist: {d['dist_km']:.2f} km")
             folium.CircleMarker([d['lat'], d['lng']],
