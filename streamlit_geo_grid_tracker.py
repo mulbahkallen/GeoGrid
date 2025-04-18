@@ -136,7 +136,8 @@ class GeoGridTracker:
 
                 rec = {
                     'keyword': kw,
-                    'lat': pt['lat'], 'lng': pt['lng'],
+                    'lat': pt['lat'],
+                    'lng': pt['lng'],
                     'dist_km': pt['dist_km'],
                     'org_rank': org,
                     'lp_rank': lp,
@@ -171,7 +172,6 @@ class GeoGridTracker:
         cmap = _build_colormap()
         cmap.caption = f"{mode.replace('_', ' ').title()} (1=Best)"
 
-        # Heatmap layer
         hm_data = [
             (d['lat'], d['lng'], (11 - d[mode] if d.get(mode) and d[mode] <= 10 else 0))
             for d in data if d.get(mode) is not None
@@ -180,7 +180,6 @@ class GeoGridTracker:
             folium.FeatureGroup(name='Heatmap', show=False).add_to(m)
         )
 
-        # Marker cluster
         mc = MarkerCluster(name='Points').add_to(m)
         for d in data:
             r = d.get(mode)
@@ -189,7 +188,6 @@ class GeoGridTracker:
                 f"Rank: {r or 'X'}<br>KW: {d['keyword']}<br>Dist: {d['dist_km']:.2f} km"
                 f"<br>My Biz: {d['target_rating']}★ ({d['target_reviews']} revs)"
             )
-            # show top 3 competitors
             for c in d['competitors'][:3]:
                 tooltip += f"<br>{c['position']}. {c['name']} {c['rating']}★"
 
@@ -208,7 +206,7 @@ class GeoGridTracker:
         return m
 
 # --- Streamlit App ---
-st.set_page_config("SEO Geo-Grid Tracker", layout="wide")
+st.set_page_config(page_title="SEO Geo-Grid Tracker", layout="wide")
 st.title("🌐 SEO Geo-Grid Visibility Tracker")
 
 # Sidebar Inputs
@@ -220,15 +218,21 @@ shape = st.sidebar.selectbox("Grid Shape", ['Circle', 'Square'])
 rad = st.sidebar.slider("Radius (km)", 0.5, 10.0, 2.0, 0.5)
 step = st.sidebar.slider("Spacing (km)", 0.1, 2.0, 0.5, 0.1)
 keywords = [k.strip() for k in st.sidebar.text_area(
-    "Keywords (one per line)", "coffee shop near me espresso bar café").split("\n") if k.strip()]
+    "Keywords (one per line)", "coffee shop near me\nespresso bar\ncafé"
+).split("\n") if k.strip()]
 
 # Instantiate tracker
 global_tracker = GeoGridTracker(gkey, skey)
 
-# Run Scan\ if st.sidebar.button("Run Scan"):
-    data = global_tracker.run(biz, addr, rad, step, keywords, shape, st.progress(0))
+# Run Scan
+def run_scan():
+    progress = st.progress(0)
+    data = global_tracker.run(biz, addr, rad, step, keywords, shape, progress)
     st.session_state['data'] = data
     st.session_state['summary'] = global_tracker.summarize()
+
+if st.sidebar.button("Run Scan"):
+    run_scan()
 
 # Show Summary
 if 'summary' in st.session_state:
@@ -240,7 +244,7 @@ if 'summary' in st.session_state:
     cols[3].metric("Maps %", f"{s['gmp_pct']:.1f}%")
 
 # Tabs for each rank type
-tab1, tab2, tab3 = st.tabs(["Organic", "Local Pack", "Maps"]
+tab1, tab2, tab3 = st.tabs(["Organic", "Local Pack", "Maps"] )
 for tab, mode in zip([tab1, tab2, tab3], ['org_rank', 'lp_rank', 'gmp_rank']):
     with tab:
         data = st.session_state.get('data', [])
@@ -250,7 +254,6 @@ for tab, mode in zip([tab1, tab2, tab3], ['org_rank', 'lp_rank', 'gmp_rank']):
                 center = [loc['lat'], loc['lng']]
                 m = global_tracker.map(data, center, mode)
                 st_folium(m, width=800, height=600)
-                # Export options
                 df = pd.DataFrame(data)
                 st.download_button("Download CSV", df.to_csv(index=False), "results.csv")
                 st.download_button("Download JSON", json.dumps(data, default=str), "results.json")
