@@ -4,7 +4,7 @@ Streamlit SEO Geo-Grid Visibility Tracker
 A web interface for tracking local & Maps-based search visibility across a geographic grid.
 Requires:
 - Google Maps API key
-- Serpstack Access Key (for Google SERP data)
+- ScraperAPI Access Key (for Google SERP data)
 
 Run with: streamlit run streamlit_geo_grid_tracker.py
 """
@@ -26,9 +26,9 @@ import plotly.graph_objects as go
 
 
 class GeoGridTracker:
-    def __init__(self, google_maps_api_key: str, serpstack_access_key: str):
+    def __init__(self, google_maps_api_key: str, scraperapi_key: str):
         self.google_maps_api_key = google_maps_api_key
-        self.serpstack_access_key = serpstack_access_key
+        self.scraperapi_key = scraperapi_key
         self.results_data = []
         self.gmaps_client = googlemaps.Client(key=self.google_maps_api_key)
 
@@ -74,28 +74,24 @@ class GeoGridTracker:
 
     def search_serp(self, keyword: str, location: dict,
                     language: str = "en", country: str = "us") -> dict:
-        url = "https://api.serpstack.com/search"
+        # Use ScraperAPI structured Google Search endpoint
+        url = "https://api.scraperapi.com/structured/google/search"
         params = {
-            "access_key": self.serpstack_access_key,
+            "api_key": self.scraperapi_key,
             "query": keyword,
-            "location": f"{location['lat']},{location['lng']}",
-            "engine": "google",
-            "device": "desktop",
-            "gl": country,
-            "hl": language,
-            "num": 10,
-            "auto_location": 0
+            "country": country,
+            "language": language
         }
-        resp = requests.get(url, params=params)
-        data = resp.json()
-        if not data.get("success", True):
-            err = data.get("error", {})
-            st.error(f"Serpstack error {err.get('code')}: {err.get('info')}")
+        try:
+            resp = requests.get(url, params=params)
+            data = resp.json()
+            return data
+        except Exception as e:
+            st.error(f"Error fetching SERP via ScraperAPI: {e}")
             return {}
-        return data
 
     def search_places(self, keyword: str, location: dict, radius_m: int = 1000) -> list:
-        """Use Places Nearby Search with a radius; do not combine rank_by and radius."""
+        """Use Google Places Nearby Search with radius."""
         results = self.gmaps_client.places_nearby(
             location=(location['lat'], location['lng']),
             radius=radius_m,
@@ -214,6 +210,7 @@ class GeoGridTracker:
             summary['avg_gmaps_rank'] = df.loc[df['gmaps_rank'].notna(), 'gmaps_rank'].mean()
         return {'summary': summary}
 
+
 # Streamlit App UI
 st.set_page_config(page_title="SEO Geo-Grid Visibility Tracker", page_icon="🌐", layout="wide")
 
@@ -222,7 +219,7 @@ st.markdown("Track local & Maps-based search visibility across a geographic grid
 
 # Sidebar inputs
 google_api_key = st.sidebar.text_input("Google Maps API Key", type="password")
-serpstack_key = st.sidebar.text_input("Serpstack Access Key", type="password")
+scraperapi_key = st.sidebar.text_input("ScraperAPI Access Key", type="password")
 
 business_profile_name = st.sidebar.text_input("Business Profile Name", "")
 business_address = st.sidebar.text_input("Business Address", placeholder="1600 Amphitheatre Parkway, Mountain View, CA 94043, USA")
@@ -244,7 +241,7 @@ def display_grid_preview():
     if not business_address or not google_api_key:
         st.warning("Enter address & Maps key to preview grid.")
         return
-    tracker = GeoGridTracker(google_api_key, serpstack_key)
+    tracker = GeoGridTracker(google_api_key, scraperapi_key)
     place = tracker.geocode_address(business_address)
     if not place:
         return
@@ -266,8 +263,8 @@ with tab1:
     st.header("Grid Preview")
     display_grid_preview()
     st.header("Run Tracking")
-    if st.button("Start Tracking", disabled=not all([google_api_key, serpstack_key, business_profile_name, business_address, keywords])):
-        tracker = GeoGridTracker(google_api_key, serpstack_key)
+    if st.button("Start Tracking", disabled=not all([google_api_key, scraperapi_key, business_profile_name, business_address, keywords])):
+        tracker = GeoGridTracker(google_api_key, scraperapi_key)
         place = tracker.geocode_address(business_address)
         if place:
             loc = place['geometry']['location']
@@ -283,7 +280,7 @@ with tab2:
         for idx, kw in enumerate(keywords):
             st.subheader(kw)
             subset = [r for r in st.session_state['results'] if r['keyword'] == kw]
-            tr = GeoGridTracker(google_api_key, serpstack_key)
+            tr = GeoGridTracker(google_api_key, scraperapi_key)
             m = tr.create_folium_map(subset, st.session_state['results'][0]['lat'], st.session_state['results'][0]['lng'], choice)
             st_folium(m, width=800, height=500, key=f"map_{idx}")
     else:
