@@ -95,11 +95,11 @@ class GeoGridTracker:
         return data
 
     def search_places(self, keyword: str, location: dict, radius_m: int = 1000) -> list:
+        """Use Places Nearby Search with a radius; do not combine rank_by and radius."""
         results = self.gmaps_client.places_nearby(
             location=(location['lat'], location['lng']),
             radius=radius_m,
-            keyword=keyword,
-            rank_by='distance'
+            keyword=keyword
         ).get('results', [])
         return results
 
@@ -214,7 +214,6 @@ class GeoGridTracker:
             summary['avg_gmaps_rank'] = df.loc[df['gmaps_rank'].notna(), 'gmaps_rank'].mean()
         return {'summary': summary}
 
-
 # Streamlit App UI
 st.set_page_config(page_title="SEO Geo-Grid Visibility Tracker", page_icon="🌐", layout="wide")
 
@@ -312,4 +311,3 @@ with tab4:
         st.info("Raw data will appear here after running tracking.")
 
 st.markdown("---")
-st.markdown("Built with Serpstack & Google Maps API")
