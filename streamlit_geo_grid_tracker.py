@@ -1,31 +1,8 @@
-"""
-Streamlit SEO Geo-Grid Visibility Tracker
-
-Automatically use:
-- Google Business Profile Name
-- Website URL
-
-to fetch:
-- Local Pack & Organic SERP rankings via Serpstack
-- Google Maps listing rank via Google Places API
-
-Display:
-- Local Pack coverage (Plotly scattermap)
-- Organic coverage (Folium heatmap)
-- Maps listing coverage (Plotly scattermap)
-
-Requires:
-- Google Maps API Key
-- Serpstack API Key
-
-Run:
-    streamlit run streamlit_geo_grid_tracker.py
-"""
-
 import time
 import datetime
 import json
 import math
+import re
 import requests
 import pandas as pd
 import numpy as np
@@ -37,6 +14,7 @@ import folium
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
 import plotly.graph_objects as go
+from bs4 import BeautifulSoup
 
 # --- HTTP retry session ---
 session = requests.Session()
@@ -44,7 +22,7 @@ from requests.adapters import HTTPAdapter, Retry
 retries = Retry(total=3, backoff_factor=1, status_forcelist=[429,500,502,503,504])
 session.mount('https://', HTTPAdapter(max_retries=retries))
 
-# --- Serpstack helpers ---
+# --- Serpstack & ScraperAPI helpers ---
 def serpstack_location_api(api_key, city_query):
     url = 'https://api.serpstack.com/locations'
     params = {'access_key': api_key, 'query': city_query, 'limit': 1}
@@ -54,11 +32,66 @@ def serpstack_location_api(api_key, city_query):
         data = r.json()
         if isinstance(data, list) and data:
             return data[0].get('canonical_name')
-    except:
-        pass
+    except Exception as e:
+        st.error(f"Location API error: {str(e)}")
     return None
 
+def scraper_api_search(api_key, query, location):
+    """Use ScraperAPI to get raw SERP data"""
+    url = 'https://api.scraperapi.com/scrape'
+    search_url = f"https://www.google.com/search?q={requests.utils.quote(query)}&near={requests.utils.quote(location)}"
+    
+    payload = {
+        'api_key': api_key,
+        'url': search_url,
+        'render': True,
+        'country_code': 'us'
+    }
+    
+    try:
+        response = session.post(url, json=payload, timeout=60)
+        response.raise_for_status()
+        return response.text
+    except Exception as e:
+        st.error(f"ScraperAPI error: {str(e)}")
+        return None
+
+def parse_serp_results(html_content, business_name, domain):
+    """Parse HTML content to extract local pack and organic results"""
+    if not html_content:
+        return None, None
+    
+    soup = BeautifulSoup(html_content, 'html.parser')
+    results = {
+        'local_pack': None,
+        'organic': None
+    }
+    
+    # Find local pack (typically in a div with class "VkpGBb")
+    local_pack = soup.find('div', {'class': 'VkpGBb'}) or soup.find('div', {'class': 'H93uF'})
+    if local_pack:
+        local_businesses = local_pack.find_all('div', {'class': 'rllt__details'})
+        for idx, business in enumerate(local_businesses, 1):
+            name_elem = business.find('span', {'class': 'OSrXXb'}) or business.find('div', {'class': 'dbg0pd'})
+            if name_elem and business_name.lower() in name_elem.text.lower():
+                results['local_pack'] = idx
+                break
+    
+    # Find organic results
+    organic_results = soup.find_all('div', {'class': 'g'})
+    for idx, result in enumerate(organic_results, 1):
+        link = result.find('a')
+        if link and link.get('href'):
+            url = link.get('href')
+            title = result.find('h3')
+            if domain in url or (title and business_name.lower() in title.text.lower()):
+                results['organic'] = idx
+                break
+    
+    return results['local_pack'], results['organic']
+
 def serpstack_search(api_key, query, location_name):
+    """Original Serpstack search function"""
     url = 'https://api.serpstack.com/search'
     params = {
         'access_key': api_key,
@@ -76,8 +109,8 @@ def serpstack_search(api_key, query, location_name):
         data = r.json()
         if data.get('success', True):
             return data
-    except:
-        pass
+    except Exception as e:
+        st.error(f"SerpStack API error: {str(e)}")
     return {}
 
 # --- Google Places helpers ---
@@ -85,34 +118,46 @@ def google_places_fetch(lat, lon, keyword, api_key):
     base = 'https://maps.googleapis.com/maps/api/place/nearbysearch/json'
     params = {'location': f"{lat},{lon}", 'keyword': keyword, 'rankby': 'distance', 'key': api_key}
     all_results = []
-    for _ in range(3):
-        r = session.get(base, params=params, timeout=30)
-        if not r.ok:
-            break
-        data = r.json()
-        all_results.extend(data.get('results', []))
-        token = data.get('next_page_token')
-        if not token:
-            break
-        time.sleep(2)
-        params['pagetoken'] = token
-    structured = []
-    for p in all_results:
-        structured.append({
-            'place_id': p.get('place_id'),
-            'name': p.get('name','').lower(),
-            'rating': float(p.get('rating') or 0),
-            'reviews': int(p.get('user_ratings_total') or 0)
-        })
-    structured.sort(key=lambda x: (-x['rating'], -x['reviews'], x['name']))
-    return structured
+    
+    try:
+        for _ in range(3):
+            r = session.get(base, params=params, timeout=30)
+            if not r.ok: 
+                st.error(f"Google Places API error: {r.status_code}")
+                break
+            data = r.json()
+            all_results.extend(data.get('results', []))
+            token = data.get('next_page_token')
+            if not token: break
+            time.sleep(2)
+            params['pagetoken'] = token
+            
+        structured = []
+        for p in all_results:
+            structured.append({
+                'place_id': p.get('place_id'),
+                'name': p.get('name','').lower(),
+                'rating': float(p.get('rating') or 0),
+                'reviews': int(p.get('user_ratings_total') or 0),
+                'vicinity': p.get('vicinity', '')
+            })
+        structured.sort(key=lambda x: (-x['rating'], -x['reviews'], x['name']))
+        return structured
+    except Exception as e:
+        st.error(f"Google Places fetch error: {str(e)}")
+        return []
 
 def google_places_rank(lat, lon, business_name, domain, api_key):
     spots = google_places_fetch(lat, lon, business_name, api_key)
+    map_rank = None
+    business_name_lower = business_name.lower()
+    
     for idx, item in enumerate(spots, start=1):
-        if business_name.lower() in item['name']:
-            return idx
-    return None
+        if business_name_lower in item['name']:
+            map_rank = idx
+            break
+    
+    return map_rank, spots[:10]  # Return top 10 competitors for analysis
 
 # --- Color map builder ---
 def _build_colormap():
@@ -125,22 +170,18 @@ def create_scattermap(df, center_lat, center_lon, rank_col, title):
     for _, row in df.iterrows():
         r = row.get(rank_col)
         if pd.isna(r) or r is None:
-            color, text = 'red','X'
+            color, text = 'gray','X'
         else:
             r = int(r)
-            if r <= 3:
-                color = 'green'
-            elif r <= 10:
-                color = 'orange'
-            else:
-                color = 'red'
+            if r <= 3: color='green'
+            elif r <= 10: color='orange'
+            else: color='red'
             text = str(r)
         fig.add_trace(go.Scattermapbox(
             lat=[row['lat']], lon=[row['lng']], mode='markers+text',
             marker=dict(size=20, color=color), text=[text], textposition='middle center',
             textfont=dict(size=14, color='white'), hoverinfo='text',
-            hovertext=(f"Keyword: {row['keyword']}<br>Rank: {text}<br>"
-                       f"Dist: {row['dist_km']:.2f}km"),
+            hovertext=f"Keyword: {row['keyword']}<br>Rank: {text}<br>Dist: {row['dist_km']:.2f}km",
             showlegend=False
         ))
     fig.update_layout(
@@ -152,145 +193,347 @@ def create_scattermap(df, center_lat, center_lon, rank_col, title):
     )
     return fig
 
+# --- Competitor Analysis ---
+def analyze_competitors(all_competitors):
+    """Analyze top competitors from Google Places data"""
+    if not all_competitors:
+        return pd.DataFrame()
+    
+    # Flatten the list of lists
+    all_spots = []
+    for competitors in all_competitors:
+        if competitors:
+            all_spots.extend(competitors)
+    
+    if not all_spots:
+        return pd.DataFrame()
+    
+    # Count occurrences of each business
+    business_counts = {}
+    for spot in all_spots:
+        name = spot['name']
+        if name in business_counts:
+            business_counts[name]['count'] += 1
+            business_counts[name]['avg_rating'] = (business_counts[name]['avg_rating'] * 
+                                                  (business_counts[name]['count']-1) + 
+                                                  spot['rating']) / business_counts[name]['count']
+            business_counts[name]['total_reviews'] += spot['reviews']
+        else:
+            business_counts[name] = {
+                'count': 1,
+                'avg_rating': spot['rating'],
+                'total_reviews': spot['reviews'],
+                'vicinity': spot['vicinity']
+            }
+    
+    # Convert to DataFrame
+    df_competitors = pd.DataFrame([
+        {
+            'business_name': name,
+            'appearance_count': data['count'],
+            'avg_rating': round(data['avg_rating'], 1),
+            'total_reviews': data['total_reviews'],
+            'address': data['vicinity']
+        }
+        for name, data in business_counts.items()
+    ])
+    
+    # Sort by appearance count
+    df_competitors = df_competitors.sort_values('appearance_count', ascending=False).reset_index(drop=True)
+    return df_competitors
+
 # --- GeoGridTracker ---
 class GeoGridTracker:
-    def __init__(self, serp_key, gmaps_key):
+    def __init__(self, serp_key, gmaps_key, scraper_key=None):
         self.serpkey = serp_key
         self.gmaps_key = gmaps_key
+        self.scraper_key = scraper_key
         self.gmaps = googlemaps.Client(key=gmaps_key)
         self.results = []
+        self.competitors = []
 
     def geocode(self, addr):
-        res = self.gmaps.geocode(addr)
-        return res[0]['geometry']['location'] if res else None
+        try:
+            res = self.gmaps.geocode(addr)
+            return res[0]['geometry']['location'] if res else None
+        except Exception as e:
+            st.error(f"Geocoding error: {str(e)}")
+            return None
 
     def reverse_city(self, lat, lng):
-        resp = self.gmaps.reverse_geocode((lat, lng), result_type=['locality','administrative_area_level_1'])
-        for comp in resp[0]['address_components']:
-            if 'locality' in comp['types'] or 'administrative_area_level_1' in comp['types']:
-                return comp['long_name']
-        return None
+        try:
+            resp = self.gmaps.reverse_geocode((lat,lng), result_type=['locality','administrative_area_level_1'])
+            for comp in resp[0]['address_components']:
+                if 'locality' in comp['types'] or 'administrative_area_level_1' in comp['types']:
+                    return comp['long_name']
+            return None
+        except Exception as e:
+            st.error(f"Reverse geocoding error: {str(e)}")
+            return None
 
     def gen_grid(self, lat0, lng0, radius, step, shape):
-        pts = []
-        lat_deg = radius / 111.0
-        lng_deg = radius / (111.0 * math.cos(math.radians(lat0)))
-        rows = int(2 * lat_deg / (step / 111.0)) + 1
-        cols = int(2 * lng_deg / (step / 111.0)) + 1
+        pts=[]
+        lat_deg = radius/111.0
+        lng_deg = radius/(111.0*math.cos(math.radians(lat0)))
+        rows = int(2*lat_deg/(step/111.0))+1
+        cols = int(2*lng_deg/(step/111.0))+1
         for i in range(rows):
             for j in range(cols):
-                lat = lat0 - lat_deg + (i * 2 * lat_deg / (rows - 1) if rows > 1 else 0)
-                lng = lng0 - lng_deg + (j * 2 * lng_deg / (cols - 1) if cols > 1 else 0)
-                d = geodesic((lat0, lng0), (lat, lng)).km
-                if shape == 'Circle' and d > radius:
-                    continue
-                pts.append({'lat': lat, 'lng': lng, 'dist_km': d})
+                lat = lat0 - lat_deg + (i*2*lat_deg/(rows-1) if rows>1 else 0)
+                lng = lng0 - lng_deg + (j*2*lng_deg/(cols-1) if cols>1 else 0)
+                d = geodesic((lat0,lng0),(lat,lng)).km
+                if shape=='Circle' and d>radius: continue
+                pts.append({'lat':lat,'lng':lng,'dist_km':d})
         return pts
-
-    def normalize_url(self, url):
-        return url.rstrip('/').lower()
 
     def run_scan(self, business, website, radius, step, shape, progress=None):
         center = self.geocode(business)
-        if not center:
-            return []
-        target_url = self.normalize_url(website)
+        if not center: return []
+        
         domain = urlparse(website).netloc.lower()
+        if not domain.startswith(('http://', 'https://')):
+            domain = domain.replace('www.', '')
+            
         grid = self.gen_grid(center['lat'], center['lng'], radius, step, shape)
         total = len(grid)
         out = []
+        all_competitors = []
+        
         for idx, pt in enumerate(grid, start=1):
-            if progress:
-                progress.progress(idx / total)
+            if progress: progress.progress(idx/total)
             city = self.reverse_city(pt['lat'], pt['lng']) or ''
+            
+            # Get location for search
             locn = serpstack_location_api(self.serpkey, city)
-            serp = serpstack_search(self.serpkey, business, locn or city)
-            # Organic: match exact URL first, then fallback to domain/title
-            org_rank = None
-            for item in serp.get('organic_results', []):
-                url = item.get('url', '').rstrip('/').lower()
-                pos = item.get('position') or None
-                if url == target_url:
-                    org_rank = pos
-                    break
-            if org_rank is None:
-                for item in serp.get('organic_results', []):
-                    u = item.get('url', '').lower()
-                    title = item.get('title', '').lower()
-                    if domain in u or business.lower() in title:
-                        org_rank = item.get('position')
-                        break
-            # Local Pack: direct from local_results
-            lp_rank = None
-            for item in serp.get('local_results', []):
-                if business.lower() == item.get('title', '').lower():
-                    lp_rank = item.get('position') or None
-                    break
-            # Google Maps listing
-            gmp_rank = google_places_rank(pt['lat'], pt['lng'], business, domain, self.gmaps_key)
+            location_str = locn or city
+            
+            # Get SERP results
+            if self.scraper_key:
+                # Try with ScraperAPI
+                html_content = scraper_api_search(self.scraper_key, business, location_str)
+                lp, org = parse_serp_results(html_content, business, domain)
+            else:
+                # Fallback to SerpStack
+                serp = serpstack_search(self.serpkey, business, location_str)
+                org = next((i for i, r in enumerate(serp.get('organic_results', []),1)
+                            if domain in r.get('url','').lower() or business.lower() in r.get('title','').lower()), None)
+                lp = next((i for i, r in enumerate(serp.get('local_results', []),1)
+                           if business.lower() in r.get('title','').lower()), None)
+            
+            # Get Google Maps ranking
+            gmp, top_competitors = google_places_rank(pt['lat'], pt['lng'], business, domain, self.gmaps_key)
+            all_competitors.append(top_competitors)
+            
             out.append({
                 'keyword': business,
-                'lat': pt['lat'], 'lng': pt['lng'], 'dist_km': pt['dist_km'],
-                'org_rank': org_rank,
-                'lp_rank': lp_rank,
-                'gmp_rank': gmp_rank
+                'lat': pt['lat'],
+                'lng': pt['lng'],
+                'dist_km': pt['dist_km'],
+                'org_rank': org,
+                'lp_rank': lp,
+                'gmp_rank': gmp,
+                'location': location_str
             })
-            time.sleep(1)
+            
+            # Throttle requests
+            time.sleep(1.5)
+        
         self.results = out
+        self.competitors = all_competitors
         st.session_state['center'] = center
+        st.session_state['competitors'] = analyze_competitors(all_competitors)
         return out
 
 # --- Streamlit UI ---
 st.set_page_config(page_title='SEO Geo-Grid Tracker', layout='wide')
 st.title('🌐 SEO Geo-Grid Visibility Tracker')
+
 # Sidebar
-gmaps_key = st.sidebar.text_input('Google Maps API Key', type='password')
-serp_key = st.sidebar.text_input('Serpstack API Key', type='password')
-business = st.sidebar.text_input('Business Profile Name')
-website = st.sidebar.text_input('Website URL')
-shape = st.sidebar.selectbox('Grid Shape', ['Circle', 'Square'])
-radius = st.sidebar.slider('Radius (km)', 0.5, 10.0, 2.0, 0.5)
-step = st.sidebar.slider('Spacing (km)', 0.1, 2.0, 0.5, 0.1)
-tracker = GeoGridTracker(serp_key, gmaps_key) if serp_key and gmaps_key else None
-if tracker and business and website:
-    if st.sidebar.button('Run Scan'):
-        prog = st.progress(0)
-        data = tracker.run_scan(business, website, radius, step, shape, prog)
-        st.session_state['data'] = data
-        df = pd.DataFrame(data)
-        st.session_state['summary'] = {
-            'total': len(df),
-            'org_pct': df['org_rank'].notna().mean() * 100,
-            'lp_pct': df['lp_rank'].notna().mean() * 100,
-            'gmp_pct': df['gmp_rank'].notna().mean() * 100
-        }
-else:
-    st.sidebar.warning('Enter all fields to run scan')
+with st.sidebar:
+    st.header("API Keys")
+    gmaps_key = st.text_input('Google Maps API Key', type='password')
+    serp_key = st.text_input('Serpstack API Key', type='password')
+    scraper_key = st.text_input('ScraperAPI Key (optional)', type='password', 
+                              help="Using ScraperAPI improves SERP result detection")
+    
+    st.header("Business Information")
+    business = st.text_input('Business Profile Name')
+    website = st.text_input('Website URL')
+    
+    st.header("Grid Configuration")
+    shape = st.selectbox('Grid Shape', ['Circle','Square'])
+    radius = st.slider('Radius (km)', 0.5, 10.0, 2.0, 0.5)
+    step = st.slider('Spacing (km)', 0.1, 2.0, 0.5, 0.1)
+    
+    tracker = GeoGridTracker(serp_key, gmaps_key, scraper_key) if serp_key and gmaps_key else None
+    
+    if tracker and business and website:
+        if st.button('Run Scan', type="primary"):
+            with st.spinner('Running scan... This may take a few minutes'):
+                prog = st.progress(0)
+                data = tracker.run_scan(business, website, radius, step, shape, prog)
+                st.session_state['data'] = data
+                df = pd.DataFrame(data)
+                
+                # Calculate visibility metrics
+                st.session_state['summary'] = {
+                    'total': len(df),
+                    'org_pct': df['org_rank'].notna().mean()*100,
+                    'org_top3': (df['org_rank'] <= 3).mean()*100 if not df['org_rank'].empty else 0,
+                    'lp_pct': df['lp_rank'].notna().mean()*100,
+                    'lp_top3': (df['lp_rank'] <= 3).mean()*100 if not df['lp_rank'].empty else 0,
+                    'gmp_pct': df['gmp_rank'].notna().mean()*100,
+                    'gmp_top3': (df['gmp_rank'] <= 3).mean()*100 if not df['gmp_rank'].empty else 0
+                }
+                st.success('Scan completed!')
+    else:
+        st.warning('Enter all required fields to run scan')
 
 # Display results
 if 'data' in st.session_state:
     s = st.session_state['summary']
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric('Points', s['total'])
-    c2.metric('Organic %', f"{s['org_pct']:.1f}%")
-    c3.metric('Local Pack %', f"{s['lp_pct']:.1f}%")
-    c4.metric('Maps %', f"{s['gmp_pct']:.1f}%")
-    tab1, tab2, tab3 = st.tabs(['Local Pack Coverage', 'Organic Heatmap', 'Maps Coverage'])
+    
+    # Summary KPIs
+    st.header("Visibility Summary")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.subheader("Local Pack Coverage")
+        st.metric("Visibility", f"{s['lp_pct']:.1f}%")
+        st.metric("Top 3 Positions", f"{s['lp_top3']:.1f}%")
+    
+    with col2:
+        st.subheader("Organic Coverage")
+        st.metric("Visibility", f"{s['org_pct']:.1f}%")
+        st.metric("Top 3 Positions", f"{s['org_top3']:.1f}%")
+    
+    with col3:
+        st.subheader("Maps Coverage")
+        st.metric("Visibility", f"{s['gmp_pct']:.1f}%")
+        st.metric("Top 3 Positions", f"{s['gmp_top3']:.1f}%")
+    
+    # Main visualization tabs
+    tab1, tab2, tab3, tab4 = st.tabs(['Local Pack Coverage', 'Organic Coverage', 'Maps Coverage', 'Competitor Analysis'])
+    
     center = st.session_state['center']
     df = pd.DataFrame(st.session_state['data'])
+    
     with tab1:
         fig1 = create_scattermap(df, center['lat'], center['lng'], 'lp_rank', 'Local Pack Coverage')
         st.plotly_chart(fig1, use_container_width=True)
+        
+        # Local Pack data table
+        st.subheader("Local Pack Rankings Detail")
+        lp_data = df[['location', 'dist_km', 'lp_rank']].copy()
+        lp_data.columns = ['Location', 'Distance (km)', 'Local Pack Rank']
+        st.dataframe(lp_data.sort_values('Distance (km)'))
+    
     with tab2:
+        # Organic heatmap
+        st.subheader("Organic Rankings Heatmap")
         folmap = folium.Map(location=[center['lat'], center['lng']], zoom_start=12, tiles='CartoDB positron')
-        HeatMap([(d['lat'], d['lng'], (11 - d['org_rank'] if d['org_rank'] and d['org_rank'] <= 10 else 0)) for d in st.session_state['data']]).add_to(folmap)
+        
+        # Add heat map data
+        heat_data = []
+        for d in st.session_state['data']:
+            value = 11 - d['org_rank'] if d['org_rank'] and d['org_rank'] <= 10 else 0
+            if value > 0:  # Only add points where business appears
+                heat_data.append([d['lat'], d['lng'], value])
+        
+        HeatMap(heat_data).add_to(folmap)
         st_folium(folmap, key='organic_heatmap', width=700, height=500)
+        
+        # Organic data table
+        st.subheader("Organic Rankings Detail")
+        org_data = df[['location', 'dist_km', 'org_rank']].copy()
+        org_data.columns = ['Location', 'Distance (km)', 'Organic Rank']
+        st.dataframe(org_data.sort_values('Distance (km)'))
+    
     with tab3:
         fig3 = create_scattermap(df, center['lat'], center['lng'], 'gmp_rank', 'Google Maps Coverage')
         st.plotly_chart(fig3, use_container_width=True)
+        
+        # Maps data table
+        st.subheader("Google Maps Rankings Detail")
+        maps_data = df[['location', 'dist_km', 'gmp_rank']].copy() 
+        maps_data.columns = ['Location', 'Distance (km)', 'Maps Rank']
+        st.dataframe(maps_data.sort_values('Distance (km)'))
+    
+    with tab4:
+        st.subheader("Top Local Competitors")
+        if 'competitors' in st.session_state and not st.session_state['competitors'].empty:
+            st.dataframe(st.session_state['competitors'].head(10), use_container_width=True)
+            
+            # Competitor visualization
+            st.subheader("Competitor Presence")
+            top5 = st.session_state['competitors'].head(5)
+            
+            # Create bar chart
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=top5['business_name'],
+                y=top5['appearance_count'],
+                text=top5['appearance_count'],
+                textposition='auto',
+                marker_color='lightseagreen'
+            ))
+            fig.update_layout(
+                title='Top 5 Competitors by Grid Presence',
+                xaxis_title='Business',
+                yaxis_title='Appearances in Grid',
+                template='plotly_white'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Ratings comparison
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(
+                x=top5['business_name'],
+                y=top5['avg_rating'],
+                text=top5['avg_rating'].apply(lambda x: f"{x:.1f}"),
+                textposition='auto',
+                marker_color='coral'
+            ))
+            fig2.update_layout(
+                title='Average Rating of Top Competitors',
+                xaxis_title='Business',
+                yaxis_title='Average Rating',
+                template='plotly_white',
+                yaxis=dict(range=[0, 5])
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("No competitor data available. Run a scan to analyze competitors.")
+    
     # Downloads
-    st.download_button('Download CSV', df.to_csv(index=False), 'results.csv', key='csv')
-    st.download_button('Download JSON', json.dumps(st.session_state['data']), 'results.json', key='json')
+    st.header("Export Results")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button('Download CSV', df.to_csv(index=False), 'geo_grid_results.csv', key='csv')
+    with col2:
+        st.download_button('Download JSON', json.dumps(st.session_state['data']), 'geo_grid_results.json', key='json')
+
+    # Help info
+    with st.expander("How to Interpret Results"):
+        st.markdown("""
+        ### Understanding Your Geo-Grid Results
+        
+        - **Local Pack Coverage**: Shows where your business appears in Google's Local Pack (the map listings at the top of search results). Green markers (1-3) are excellent positions.
+        
+        - **Organic Coverage**: The heatmap shows where your website ranks in the organic search results. Brighter areas indicate better rankings (positions 1-3).
+        
+        - **Maps Coverage**: Shows your business's ranking in Google Maps results at each grid point. Green markers indicate top 3 positions.
+        
+        - **Competitor Analysis**: Identifies which competitors appear most frequently across your grid, helping you understand your competition landscape.
+        
+        ### Improvement Strategies
+        
+        1. **For Local Pack**: Focus on optimizing your Google Business Profile with accurate information, photos, and collecting more reviews.
+        
+        2. **For Organic Rankings**: Improve on-page SEO for your target keywords and build quality local backlinks.
+        
+        3. **For Maps Visibility**: Ensure NAP (Name, Address, Phone) consistency across all online directories and embed Google Maps on your website.
+        """)
 
 st.markdown('---')
-st.write('© Built with Serpstack & Google Maps API')
+st.write('© Built with Serpstack, ScraperAPI & Google Maps API')
