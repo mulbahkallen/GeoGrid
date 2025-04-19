@@ -36,17 +36,27 @@ def serpstack_location_api(api_key, city_query):
         st.error(f"Location API error: {str(e)}")
     return None
 
-def scraper_api_search(api_key, query, location):
-    """Use ScraperAPI to get raw SERP data"""
+def scraper_api_search(api_key, query, location, domain):
+    """Use ScraperAPI with specific parameters to get SERP data"""
     url = 'https://api.scraperapi.com/scrape'
-    search_url = f"https://www.google.com/search?q={requests.utils.quote(query)}&near={requests.utils.quote(location)}"
     
+    # Format the search query to include location
+    search_url = f"https://www.google.com/search?q={requests.utils.quote(query)}&num=100"
+    
+    # Set up specific location parameters
     payload = {
         'api_key': api_key,
         'url': search_url,
         'render': True,
-        'country_code': 'us'
+        'country_code': 'us',
+        'device_type': 'desktop',
+        'auto_extract': True,  # Enable auto extraction of structured data
+        'premium_proxy': True  # Use premium proxies for better success rate
     }
+    
+    # Add location parameter if provided
+    if location:
+        payload['location'] = location
     
     try:
         response = session.post(url, json=payload, timeout=60)
@@ -57,7 +67,7 @@ def scraper_api_search(api_key, query, location):
         return None
 
 def parse_serp_results(html_content, business_name, domain):
-    """Parse HTML content to extract local pack and organic results"""
+    """Enhanced parser for organic and local pack results"""
     if not html_content:
         return None, None
     
@@ -67,24 +77,62 @@ def parse_serp_results(html_content, business_name, domain):
         'organic': None
     }
     
-    # Find local pack (typically in a div with class "VkpGBb")
-    local_pack = soup.find('div', {'class': 'VkpGBb'}) or soup.find('div', {'class': 'H93uF'})
+    # Convert to lowercase for case-insensitive matching
+    business_name_lower = business_name.lower()
+    domain_lower = domain.lower()
+    
+    # 1. Find local pack results (multiple possible class names)
+    local_pack_selectors = [
+        'div.VkpGBb', 'div.H93uF', 'div[data-local-attribute="local"]', 
+        'div.local-pack', 'div.gws-local-packed__full', 'div.D5gswe'
+    ]
+    
+    local_pack = None
+    for selector in local_pack_selectors:
+        local_pack = soup.select_one(selector)
+        if local_pack:
+            break
+    
     if local_pack:
-        local_businesses = local_pack.find_all('div', {'class': 'rllt__details'})
-        for idx, business in enumerate(local_businesses, 1):
-            name_elem = business.find('span', {'class': 'OSrXXb'}) or business.find('div', {'class': 'dbg0pd'})
-            if name_elem and business_name.lower() in name_elem.text.lower():
+        # Look for business listings with various possible selectors
+        possible_listings = []
+        possible_listings.extend(local_pack.find_all('div', {'class': 'rllt__details'}))
+        possible_listings.extend(local_pack.find_all('div', {'class': 'dbg0pd'}))
+        possible_listings.extend(local_pack.find_all('div', {'class': 'cXedhc'}))
+        
+        for idx, listing in enumerate(possible_listings, 1):
+            text_content = listing.get_text().lower()
+            if business_name_lower in text_content:
                 results['local_pack'] = idx
                 break
     
-    # Find organic results
-    organic_results = soup.find_all('div', {'class': 'g'})
-    for idx, result in enumerate(organic_results, 1):
+    # 2. Find organic results with improved selectors
+    organic_results = []
+    organic_results.extend(soup.find_all('div', {'class': 'g'}))
+    organic_results.extend(soup.find_all('div', {'class': 'tF2Cxc'}))
+    organic_results.extend(soup.find_all('div', {'class': 'yuRUbf'}))
+    
+    # Deduplicate results
+    seen_urls = set()
+    unique_organic_results = []
+    for result in organic_results:
         link = result.find('a')
         if link and link.get('href'):
             url = link.get('href')
+            if url not in seen_urls:
+                seen_urls.add(url)
+                unique_organic_results.append(result)
+    
+    # Find the business in organic results
+    for idx, result in enumerate(unique_organic_results, 1):
+        link = result.find('a')
+        if link and link.get('href'):
+            url = link.get('href').lower()
             title = result.find('h3')
-            if domain in url or (title and business_name.lower() in title.text.lower()):
+            title_text = title.get_text().lower() if title else ""
+            
+            # Check for domain match or business name in title
+            if domain_lower in url or business_name_lower in title_text:
                 results['organic'] = idx
                 break
     
@@ -193,6 +241,39 @@ def create_scattermap(df, center_lat, center_lon, rank_col, title):
     )
     return fig
 
+def create_organic_heatmap(data, center_lat, center_lng):
+    """Create a folium heatmap with improved weighting"""
+    folmap = folium.Map(location=[center_lat, center_lng], zoom_start=12, 
+                        tiles='CartoDB positron')
+    
+    # Process heat data with better weighting
+    heat_data = []
+    for d in data:
+        rank = d.get('org_rank')
+        # Use inverse of rank as weight (higher for better positions)
+        if rank and rank <= 10:
+            # Weight: 10 for position 1, 9 for position 2, etc.
+            weight = 11 - rank
+            heat_data.append([d['lat'], d['lng'], weight])
+        elif rank and rank <= 20:
+            # Lower weight for positions 11-20
+            weight = (21 - rank) / 2
+            heat_data.append([d['lat'], d['lng'], weight])
+    
+    # Only add heatmap if we have data
+    if heat_data:
+        HeatMap(heat_data, 
+                min_opacity=0.4,
+                gradient={0.4: 'blue', 0.65: 'yellow', 0.9: 'red'},
+                radius=20).add_to(folmap)
+    
+    # Add marker for business location
+    folium.Marker([center_lat, center_lng], 
+                  popup="Business Location",
+                  icon=folium.Icon(color='green', icon='info-sign')).add_to(folmap)
+    
+    return folmap
+
 # --- Competitor Analysis ---
 def analyze_competitors(all_competitors):
     """Analyze top competitors from Google Places data"""
@@ -287,62 +368,70 @@ class GeoGridTracker:
         return pts
 
     def run_scan(self, business, website, radius, step, shape, progress=None):
-        center = self.geocode(business)
-        if not center: return []
+    center = self.geocode(business)
+    if not center: return []
+    
+    # Normalize domain format
+    domain = urlparse(website).netloc.lower()
+    if not domain:  # If urlparse couldn't extract the domain
+        domain = website.lower()
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        if not (domain.startswith('http://') or domain.startswith('https://')):
+            domain = domain.split('/')[0]  # Get just the domain part
+    
+    grid = self.gen_grid(center['lat'], center['lng'], radius, step, shape)
+    total = len(grid)
+    out = []
+    all_competitors = []
+    
+    for idx, pt in enumerate(grid, start=1):
+        if progress: progress.progress(idx/total)
+        city = self.reverse_city(pt['lat'], pt['lng']) or ''
         
-        domain = urlparse(website).netloc.lower()
-        if not domain.startswith(('http://', 'https://')):
-            domain = domain.replace('www.', '')
-            
-        grid = self.gen_grid(center['lat'], center['lng'], radius, step, shape)
-        total = len(grid)
-        out = []
-        all_competitors = []
+        # Get location for search
+        locn = serpstack_location_api(self.serpkey, city)
+        location_str = locn or city
         
-        for idx, pt in enumerate(grid, start=1):
-            if progress: progress.progress(idx/total)
-            city = self.reverse_city(pt['lat'], pt['lng']) or ''
-            
-            # Get location for search
-            locn = serpstack_location_api(self.serpkey, city)
-            location_str = locn or city
-            
-            # Get SERP results
-            if self.scraper_key:
-                # Try with ScraperAPI
-                html_content = scraper_api_search(self.scraper_key, business, location_str)
-                lp, org = parse_serp_results(html_content, business, domain)
-            else:
-                # Fallback to SerpStack
-                serp = serpstack_search(self.serpkey, business, location_str)
+        # Attempt SERP results with ScraperAPI first
+        lp, org = None, None
+        if self.scraper_key:
+            html_content = scraper_api_search(self.scraper_key, business, location_str, domain)
+            lp, org = parse_serp_results(html_content, business, domain)
+        
+        # Fallback to SerpStack if needed
+        if (lp is None or org is None) and self.serpkey:
+            serp = serpstack_search(self.serpkey, business, location_str)
+            if org is None:
                 org = next((i for i, r in enumerate(serp.get('organic_results', []),1)
-                            if domain in r.get('url','').lower() or business.lower() in r.get('title','').lower()), None)
+                        if domain in r.get('url','').lower() or business.lower() in r.get('title','').lower()), None)
+            if lp is None:
                 lp = next((i for i, r in enumerate(serp.get('local_results', []),1)
-                           if business.lower() in r.get('title','').lower()), None)
-            
-            # Get Google Maps ranking
-            gmp, top_competitors = google_places_rank(pt['lat'], pt['lng'], business, domain, self.gmaps_key)
-            all_competitors.append(top_competitors)
-            
-            out.append({
-                'keyword': business,
-                'lat': pt['lat'],
-                'lng': pt['lng'],
-                'dist_km': pt['dist_km'],
-                'org_rank': org,
-                'lp_rank': lp,
-                'gmp_rank': gmp,
-                'location': location_str
-            })
-            
-            # Throttle requests
-            time.sleep(1.5)
+                       if business.lower() in r.get('title','').lower()), None)
         
-        self.results = out
-        self.competitors = all_competitors
-        st.session_state['center'] = center
-        st.session_state['competitors'] = analyze_competitors(all_competitors)
-        return out
+        # Get Google Maps ranking
+        gmp, top_competitors = google_places_rank(pt['lat'], pt['lng'], business, domain, self.gmaps_key)
+        all_competitors.append(top_competitors)
+        
+        out.append({
+            'keyword': business,
+            'lat': pt['lat'],
+            'lng': pt['lng'],
+            'dist_km': pt['dist_km'],
+            'org_rank': org,
+            'lp_rank': lp,
+            'gmp_rank': gmp,
+            'location': location_str
+        })
+        
+        # Throttle requests
+        time.sleep(2)  # Increased wait time to avoid rate limits
+    
+    self.results = out
+    self.competitors = all_competitors
+    st.session_state['center'] = center
+    st.session_state['competitors'] = analyze_competitors(all_competitors)
+    return out
 
 # --- Streamlit UI ---
 st.set_page_config(page_title='SEO Geo-Grid Tracker', layout='wide')
@@ -429,25 +518,30 @@ if 'data' in st.session_state:
         st.dataframe(lp_data.sort_values('Distance (km)'))
     
     with tab2:
-        # Organic heatmap
-        st.subheader("Organic Rankings Heatmap")
-        folmap = folium.Map(location=[center['lat'], center['lng']], zoom_start=12, tiles='CartoDB positron')
-        
-        # Add heat map data
-        heat_data = []
-        for d in st.session_state['data']:
-            value = 11 - d['org_rank'] if d['org_rank'] and d['org_rank'] <= 10 else 0
-            if value > 0:  # Only add points where business appears
-                heat_data.append([d['lat'], d['lng'], value])
-        
-        HeatMap(heat_data).add_to(folmap)
-        st_folium(folmap, key='organic_heatmap', width=700, height=500)
-        
-        # Organic data table
-        st.subheader("Organic Rankings Detail")
-        org_data = df[['location', 'dist_km', 'org_rank']].copy()
-        org_data.columns = ['Location', 'Distance (km)', 'Organic Rank']
-        st.dataframe(org_data.sort_values('Distance (km)'))
+    # Organic heatmap
+    st.subheader("Organic Rankings Heatmap")
+    
+    # Create heatmap with improved function
+    folmap = create_organic_heatmap(st.session_state['data'], center['lat'], center['lng'])
+    
+    # Display the map
+    st_folium(folmap, key='organic_heatmap', width=700, height=500)
+    
+    # Create metrics for organic visibility
+    org_visible = df['org_rank'].notna().sum()
+    org_top10 = (df['org_rank'] <= 10).sum() if not df['org_rank'].empty else 0
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Visible in Organic Results", f"{org_visible} / {len(df)} locations")
+    with col2:
+        st.metric("Top 10 Positions", f"{org_top10} / {len(df)} locations")
+    
+    # Organic data table
+    st.subheader("Organic Rankings Detail")
+    org_data = df[['location', 'dist_km', 'org_rank']].copy()
+    org_data.columns = ['Location', 'Distance (km)', 'Organic Rank']
+    st.dataframe(org_data.sort_values('Organic Rank').dropna(subset=['Organic Rank']))
     
     with tab3:
         fig3 = create_scattermap(df, center['lat'], center['lng'], 'gmp_rank', 'Google Maps Coverage')
