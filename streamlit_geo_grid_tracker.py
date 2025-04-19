@@ -368,70 +368,70 @@ class GeoGridTracker:
         return pts
 
     def run_scan(self, business, website, radius, step, shape, progress=None):
-    center = self.geocode(business)
-    if not center: return []
+        center = self.geocode(business)
+        if not center: return []
     
-    # Normalize domain format
-    domain = urlparse(website).netloc.lower()
-    if not domain:  # If urlparse couldn't extract the domain
-        domain = website.lower()
-        if domain.startswith('www.'):
-            domain = domain[4:]
-        if not (domain.startswith('http://') or domain.startswith('https://')):
-            domain = domain.split('/')[0]  # Get just the domain part
+        # Normalize domain format
+        domain = urlparse(website).netloc.lower()
+        if not domain:  # If urlparse couldn't extract the domain
+            domain = website.lower()
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            if not (domain.startswith('http://') or domain.startswith('https://')):
+                domain = domain.split('/')[0]  # Get just the domain part
     
-    grid = self.gen_grid(center['lat'], center['lng'], radius, step, shape)
-    total = len(grid)
-    out = []
-    all_competitors = []
+        grid = self.gen_grid(center['lat'], center['lng'], radius, step, shape)
+        total = len(grid)
+        out = []
+        all_competitors = []
     
-    for idx, pt in enumerate(grid, start=1):
-        if progress: progress.progress(idx/total)
-        city = self.reverse_city(pt['lat'], pt['lng']) or ''
+        for idx, pt in enumerate(grid, start=1):
+            if progress: progress.progress(idx/total)
+            city = self.reverse_city(pt['lat'], pt['lng']) or ''
+            
+            # Get location for search
+            locn = serpstack_location_api(self.serpkey, city)
+            location_str = locn or city
+            
+            # Attempt SERP results with ScraperAPI first
+            lp, org = None, None
+            if self.scraper_key:
+                html_content = scraper_api_search(self.scraper_key, business, location_str, domain)
+                lp, org = parse_serp_results(html_content, business, domain)
+            
+            # Fallback to SerpStack if needed
+            if (lp is None or org is None) and self.serpkey:
+                serp = serpstack_search(self.serpkey, business, location_str)
+                if org is None:
+                    org = next((i for i, r in enumerate(serp.get('organic_results', []),1)
+                            if domain in r.get('url','').lower() or business.lower() in r.get('title','').lower()), None)
+                if lp is None:
+                    lp = next((i for i, r in enumerate(serp.get('local_results', []),1)
+                           if business.lower() in r.get('title','').lower()), None)
+            
+            # Get Google Maps ranking
+            gmp, top_competitors = google_places_rank(pt['lat'], pt['lng'], business, domain, self.gmaps_key)
+            all_competitors.append(top_competitors)
+            
+            out.append({
+                'keyword': business,
+                'lat': pt['lat'],
+                'lng': pt['lng'],
+                'dist_km': pt['dist_km'],
+                'org_rank': org,
+                'lp_rank': lp,
+                'gmp_rank': gmp,
+                'location': location_str
+            })
+            
+            # Throttle requests
+            time.sleep(2)  # Increased wait time to avoid rate limits
         
-        # Get location for search
-        locn = serpstack_location_api(self.serpkey, city)
-        location_str = locn or city
-        
-        # Attempt SERP results with ScraperAPI first
-        lp, org = None, None
-        if self.scraper_key:
-            html_content = scraper_api_search(self.scraper_key, business, location_str, domain)
-            lp, org = parse_serp_results(html_content, business, domain)
-        
-        # Fallback to SerpStack if needed
-        if (lp is None or org is None) and self.serpkey:
-            serp = serpstack_search(self.serpkey, business, location_str)
-            if org is None:
-                org = next((i for i, r in enumerate(serp.get('organic_results', []),1)
-                        if domain in r.get('url','').lower() or business.lower() in r.get('title','').lower()), None)
-            if lp is None:
-                lp = next((i for i, r in enumerate(serp.get('local_results', []),1)
-                       if business.lower() in r.get('title','').lower()), None)
-        
-        # Get Google Maps ranking
-        gmp, top_competitors = google_places_rank(pt['lat'], pt['lng'], business, domain, self.gmaps_key)
-        all_competitors.append(top_competitors)
-        
-        out.append({
-            'keyword': business,
-            'lat': pt['lat'],
-            'lng': pt['lng'],
-            'dist_km': pt['dist_km'],
-            'org_rank': org,
-            'lp_rank': lp,
-            'gmp_rank': gmp,
-            'location': location_str
-        })
-        
-        # Throttle requests
-        time.sleep(2)  # Increased wait time to avoid rate limits
-    
-    self.results = out
-    self.competitors = all_competitors
-    st.session_state['center'] = center
-    st.session_state['competitors'] = analyze_competitors(all_competitors)
-    return out
+        self.results = out
+        self.competitors = all_competitors
+        st.session_state['center'] = center
+        st.session_state['competitors'] = analyze_competitors(all_competitors)
+        return out
 
 # --- Streamlit UI ---
 st.set_page_config(page_title='SEO Geo-Grid Tracker', layout='wide')
