@@ -518,20 +518,20 @@ if 'data' in st.session_state:
         st.dataframe(lp_data.sort_values('Distance (km)'))
     
     with tab2:
-    # Organic heatmap
-    st.subheader("Organic Rankings Heatmap")
-    
-    # Create heatmap with improved function
-    folmap = create_organic_heatmap(st.session_state['data'], center['lat'], center['lng'])
-    
-    # Display the map
-    st_folium(folmap, key='organic_heatmap', width=700, height=500)
-    
-    # Create metrics for organic visibility
-    org_visible = df['org_rank'].notna().sum()
-    org_top10 = (df['org_rank'] <= 10).sum() if not df['org_rank'].empty else 0
-    
-    col1, col2 = st.columns(2)
+        # Organic heatmap
+        st.subheader("Organic Rankings Heatmap")
+        
+        # Create heatmap with improved function
+        folmap = create_organic_heatmap(st.session_state['data'], center['lat'], center['lng'])
+        
+        # Display the map
+        st_folium(folmap, key='organic_heatmap', width=700, height=500)
+        
+        # Create metrics for organic visibility
+        org_visible = df['org_rank'].notna().sum()
+        org_top10 = (df['org_rank'] <= 10).sum() if not df['org_rank'].empty else 0
+        
+        col1, col2 = st.columns(2)
     with col1:
         st.metric("Visible in Organic Results", f"{org_visible} / {len(df)} locations")
     with col2:
